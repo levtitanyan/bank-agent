@@ -1,0 +1,11 @@
+# Domains this agent is permitted to fetch from.
+#
+# Enforced deterministically in Python (Phase 2 url_policy), never by the LLM.
+# Exact host matches only - no wildcard subdomains - so that a hijacked or
+# user-content subdomain (e.g. files.acba.am.evil.com) can never be reached.
+allowed_schemes:
+  - https
+
+domains:
+  - acba.am
+  - www.acba.am

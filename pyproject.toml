@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tariff-agent"
+version = "0.1.0"
+description = "ACBA bank product tariff monitoring agent (Google ADK + Gemini)"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    # Agent + model
+    "google-adk>=1.0.0",
+    "google-genai>=1.0.0",
+    # HTTP / HTML
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    # Documents / OCR
+    "pymupdf>=1.24",
+    "pytesseract>=0.3.10",
+    "pillow>=10.0",
+    # Retrieval
+    "rank-bm25>=0.2.2",
+    "rapidfuzz>=3.9",
+    # Config / validation / CLI
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-pyyaml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tariff_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "src"

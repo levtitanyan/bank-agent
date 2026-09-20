@@ -1,0 +1,60 @@
+# Banking products this agent monitors.
+#
+# `synonyms` feed fuzzy/semantic product resolution (Phase 3): the user may type
+# "ipoteka", "consumer loan" or «սպառողական վարկ» and must land on the same product id.
+# `seed_pages` / `seed_documents` are the fallback used when live discovery fails;
+# results sourced from them are flagged is_seed so a reviewer knows they were not
+# freshly discovered.
+bank: ACBA Bank
+
+products:
+  - id: consumer_loan
+    kind: loan
+    name_hy: Սպառողական վարկ
+    name_en: Consumer loan
+    synonyms:
+      hy:
+        - սպառողական վարկ
+        - սպառողական
+        - անձնական վարկ
+        - վարկ սպառողական նպատակներով
+      en:
+        - consumer loan
+        - personal loan
+        - cash loan
+        - consumer credit
+      ru:
+        - потребительский кредит
+        - потребкредит
+        - кредит наличными
+    seed_pages:
+      - https://acba.am/hy/individual/loans/consumer-loans
+      - https://acba.am/hy/individual/loan/5G-loan
+    seed_documents:
+      - https://www.acba.am/files/loans-tariffs.pdf
+
+  - id: mortgage
+    kind: loan
+    name_hy: Հիփոթեքային վարկ
+    name_en: Mortgage
+    synonyms:
+      hy:
+        - հիփոթեքային վարկ
+        - հիփոթեք
+        - բնակարանային վարկ
+        - բնակարան ձեռք բերելու վարկ
+      en:
+        - mortgage
+        - mortgage loan
+        - home loan
+        - housing loan
+        - property purchase loan
+      ru:
+        - ипотека
+        - ипотечный кредит
+        - жилищный кредит
+    seed_pages:
+      - https://acba.am/hy/individual/loan/purchase-mortgage
+    seed_documents:
+      - https://www.acba.am/files/loan%20info.pdf
+      - https://www.acba.am/files/loans-tariffs.pdf
