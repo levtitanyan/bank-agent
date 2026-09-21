@@ -33,6 +33,63 @@ CONFIG_DIR: Final[Path] = PROJECT_ROOT / "config"
 """Directory holding the version-controlled YAML policy files."""
 
 
+class HttpSettings(BaseModel):
+    """Network behaviour of the one module allowed to make requests.
+
+    Every value is a deliberate limit rather than a magic number in the code,
+    and each is overridable through the environment with the ``TARIFF_HTTP__``
+    prefix, e.g. ``TARIFF_HTTP__READ_TIMEOUT=60``.
+
+    Attributes:
+        connect_timeout: Seconds to wait for the TCP/TLS connection.
+        read_timeout: Seconds to wait for response data.
+        max_redirects: Redirect hops followed before giving up. Each hop is
+            re-checked against the allowlist.
+        max_download_bytes: Hard cap on bytes read from one response, enforced
+            while streaming rather than trusting ``Content-Length``.
+        max_attempts: Total attempts per request, including the first one.
+        backoff_base: First backoff delay in seconds; doubles per attempt.
+        backoff_max: Ceiling for any single wait, including a server-supplied
+            ``Retry-After`` - otherwise a server could stall the whole run.
+        user_agent_contact: Contact address advertised in the User-Agent. Kept
+            out of source code and supplied through the environment.
+        respect_robots: Whether robots.txt is consulted before fetching.
+        offline: When true, no network call is made at all and only cached
+            documents are served. Used by demos and tests.
+        cache_dir: Where downloaded documents and their metadata are stored.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    connect_timeout: float = Field(default=5.0, gt=0)
+    read_timeout: float = Field(default=30.0, gt=0)
+    max_redirects: int = Field(default=5, ge=0, le=20)
+    max_download_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    backoff_base: float = Field(default=0.5, gt=0)
+    backoff_max: float = Field(default=8.0, gt=0)
+    user_agent_contact: str = ""
+    respect_robots: bool = True
+    offline: bool = False
+    cache_dir: Path = PROJECT_ROOT / "data" / "cache"
+
+    @property
+    def user_agent(self) -> str:
+        """The User-Agent header sent with every request.
+
+        Truthful about what the client is, so the bank can identify the traffic.
+        The contact address is appended only when configured, so no personal
+        data is baked into the repository.
+
+        Returns:
+            The User-Agent string.
+        """
+        agent = "ACBA-Tariff-Monitor/0.1 (educational assignment)"
+        if self.user_agent_contact:
+            agent = f"{agent[:-1]}; contact: {self.user_agent_contact})"
+        return agent
+
+
 class Settings(BaseSettings):
     """Environment-provided settings.
 
@@ -45,6 +102,8 @@ class Settings(BaseSettings):
         log_level: Root log level (env ``TARIFF_LOG_LEVEL``).
         google_api_key: AI Studio key (env ``GOOGLE_API_KEY``). ``None`` when
             unset, which is valid: offline demos and tests run without a key.
+        http: Network limits for the HTTP layer, overridable with the
+            ``TARIFF_HTTP__`` prefix (see :class:`HttpSettings`).
         use_vertexai: Whether the google-genai SDK should talk to Vertex AI
             instead of AI Studio (env ``GOOGLE_GENAI_USE_VERTEXAI``). False here:
             this project authenticates with an AI Studio key. Declared so the
@@ -54,6 +113,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="TARIFF_",
+        env_nested_delimiter="__",
         env_file=PROJECT_ROOT / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
@@ -63,6 +123,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
     use_vertexai: bool = Field(default=False, alias="GOOGLE_GENAI_USE_VERTEXAI")
+    http: HttpSettings = Field(default_factory=HttpSettings)
 
     @property
     def has_api_key(self) -> bool:

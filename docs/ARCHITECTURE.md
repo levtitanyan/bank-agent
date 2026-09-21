@@ -127,6 +127,37 @@ justification for the module. Known limitation: `ValueKind` is coarse — `FEE` 
   (with a log line), and preserves the stored `schema_version` (`0` for snapshots written
   before versioning). Fresh model output still goes through the strict constructor.
 
+### `http/` — the one network door *(Phase 2)*
+
+Everything downstream works on bytes this package has already declared safe. The LLM never
+passes a URL in: agent tools take ids produced by earlier tools.
+
+**`url_policy.py`** — pure functions, no I/O: `normalize_url`, `is_allowed_url`,
+`assert_allowed`, `filter_allowed`. Exact host membership over https. Suffix matching
+(`host.endswith(".acba.am")`) is the classic mistake — it accepts `acba.am.evil.com` — so it
+is not used. Kept separate from the client so the rule is testable without HTTP machinery
+and cheap to re-apply on every redirect hop.
+
+**`client.py`** — `SafeHttpClient.fetch(url, expect=ContentKind.PDF)` applies, in order:
+policy before the socket · separate connect/read timeouts · **manual redirect loop**, at
+most 5 hops, allowlist re-checked on each (httpx's automatic redirects would follow a hop
+off-domain silently) · streamed size cap on bytes actually received · content type checked
+against both the header and the leading magic bytes · bounded exponential backoff with
+jitter, only on timeouts, connection errors, 408/425/429/5xx · one JSON log line per fetch.
+
+**Caching is revalidation, not a short-circuit.** A monitor that served cached bytes without
+asking would never notice a new edition, so every fetch contacts the server with
+`If-None-Match` / `If-Modified-Since` from the sidecar metadata; a `304` reuses the cached
+bytes. Only `offline=true` skips the network. The validators are re-attached across a
+redirect when — and only when — the target is exactly the `final_url` the cached copy came
+from: ACBA permanently redirects `www.acba.am` → `acba.am`, and without this the ETag was
+lost on every hop and the 1 MB tariff PDF was re-downloaded on every run.
+
+**`robots.py`** — `RobotsPolicy` per host, fetched **through `SafeHttpClient` itself** (via
+`check_robots=False`) so there is exactly one network door with one set of limits. A 4xx
+means no rules exist and fetching proceeds; a 5xx or timeout means permission is unknown and
+the run stops.
+
 ### `config.py` — split by who needs to audit it
 
 - **Secrets → environment.** `Settings` (pydantic-settings) reads `.env`. App variables use
@@ -184,6 +215,11 @@ logged** — decisions and their inputs and outputs only.
 | D13 | JSON logs + `ContextVar` run id | Plain logs, pass `run_id` around | Metrics must be computable; signatures stay clean |
 | D14 | `Allowlist` is data, no methods | Give it an `is_allowed()` | Matching must run per redirect hop — that is the HTTP layer's job |
 | D15 | Python 3.11 | System Python 3.14 | No reliable PyMuPDF / google-adk wheels on 3.14 yet |
+| D16 | Manual redirect loop | `follow_redirects=True` | Automatic redirects would leave the bank's domain without ever telling us |
+| D17 | robots.txt: 4xx allows, 5xx stops | Blanket fail-open or fail-closed | Fail-open ignores a real signal; fail-closed makes the agent hostage to one file |
+| D18 | Cache revalidates every run | Serve cached bytes when present | A monitor that never asks the server cannot detect a change |
+| D19 | `sleep` and `transport` injected | Patch `time.sleep` in tests | Explicit seams keep the retry tests instant and honest |
+| D20 | 403 never retried | Retry all failures | An access decision is respected, not hammered |
 
 ## 5. Test strategy
 
@@ -198,6 +234,9 @@ a report) and lighter on plumbing:
 | Snapshot migration | 6 | backfill, drop, version 0, corrupt payload, and that the strict path stays strict |
 | Settings | 3 | prefixed and unprefixed vars, key never printed, no-key mode works |
 | Logging | 4 | run-id binding, structured extras, idempotent setup, Armenian round-trip |
+| URL policy | 19 | lookalike hosts, plain http, ports, relative resolution, percent-encoding |
+| HTTP client | 25 | 404/403 not retried, 5xx retried then succeeds, capped `Retry-After`, oversize aborted, mislabelled content rejected, off-domain redirect refused, 304 revalidation, offline mode |
+| robots.txt | 5 | disallowed path refused, 404 allows, 5xx stops the run, fetched once per host |
 
 *(Phase 9)* adds an evaluation dataset measuring product-resolution accuracy, retrieval hit
 rate, field match, NOT_FOUND precision and evidence-verification rate.
@@ -208,8 +247,8 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 |---|---|---|
 | 1 | Skeleton, config, field registry, models, errors, logging | ✅ |
 | 1.5 | Schema versioning, status rework, deterministic confidence, docs | ✅ |
-| 2 | Safe HTTP client: allowlist per redirect hop, size/MIME caps, bounded retries | next |
-| 3 | Product resolution + official source discovery | |
+| 2 | Safe HTTP client: allowlist per redirect hop, size/MIME caps, bounded retries | ✅ |
+| 3 | Product resolution + official source discovery | next |
 | 4 | PDF/HTML processing, cleaning, OCR fallback | |
 | 5 | Chunking + hybrid BM25/embedding RAG | |
 | 6 | Gemini structured extraction + deterministic validation | |

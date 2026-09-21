@@ -489,7 +489,7 @@ def test_configure_logging_is_idempotent() -> None:
 
 
 def test_armenian_text_survives_json_logging() -> None:
-    """Logs must stay readable in Armenian, not \\u0531-escaped."""
+    r"""Logs must stay readable in Armenian, not \u0531-escaped."""
     import logging
 
     record = logging.LogRecord(

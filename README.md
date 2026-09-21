@@ -8,9 +8,9 @@ escalating to a human when it cannot decide safely.
 
 Python 3.11 · Google ADK · Gemini
 
-> **Status: Phase 1.5 of 9.** Contracts only — configuration, the tariff field registry,
-> data models with their invariants, errors and structured logging. No network access,
-> document processing or model calls yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status: Phase 2 of 9.** Contracts plus the guarded HTTP layer: allow-listed,
+> size-capped, revalidating downloads from acba.am. No document parsing, retrieval or
+> model calls yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design and the roadmap.
 
 ---
@@ -34,7 +34,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the tests
 
 ```bash
-pytest                            # 48 tests
+pytest                            # 98 tests, none of which touch the network
 ```
 
 ## Demo

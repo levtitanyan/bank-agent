@@ -36,6 +36,55 @@ class DomainNotAllowedError(FetchError):
     """A URL - or a redirect hop - left the configured allowlist."""
 
 
+class HttpStatusError(FetchError):
+    """The server answered with an error status.
+
+    Attributes:
+        status_code: The HTTP status received.
+        url: The URL that produced it.
+        retry_after: Raw ``Retry-After`` header, when the server sent one. The
+            retry logic caps it, so a server cannot stall a run.
+    """
+
+    def __init__(self, status_code: int, url: str, retry_after: str | None = None) -> None:
+        """Initialize the error.
+
+        Args:
+            status_code: The HTTP status received.
+            url: The URL that produced it.
+            retry_after: Raw ``Retry-After`` header value, if present.
+        """
+        super().__init__(f"HTTP {status_code} for {url}")
+        self.status_code = status_code
+        self.url = url
+        self.retry_after = retry_after
+
+
+class ResponseTooLargeError(FetchError):
+    """A download exceeded the configured size cap and was aborted."""
+
+
+class UnexpectedContentTypeError(FetchError):
+    """The response was not the kind of document the caller expected.
+
+    Raised when the ``Content-Type`` header or the leading magic bytes do not
+    match, e.g. an HTML error page served as ``application/pdf``.
+    """
+
+
+class RobotsDisallowedError(FetchError):
+    """robots.txt forbids fetching this URL, so we do not fetch it."""
+
+
+class RobotsUnavailableError(FetchError):
+    """robots.txt could not be read, so permission is unknown.
+
+    A missing file (4xx) means "no rules exist" and is not an error. This is
+    raised only when the server failed to answer (5xx, timeout): permission is
+    genuinely unknown, so the run stops rather than guessing in our own favour.
+    """
+
+
 class DocumentError(TariffAgentError):
     """A downloaded document could not be parsed, OCR'd or cleaned."""
 
