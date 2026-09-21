@@ -8,9 +8,10 @@ escalating to a human when it cannot decide safely.
 
 Python 3.11 · Google ADK · Gemini
 
-> **Status: Phase 3 of 9.** Contracts, the guarded HTTP layer, and discovery: a fuzzy
-> product name now resolves to a product and to the official ACBA pages and documents that
-> state its tariffs. No document parsing, retrieval or model calls yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status: Phase 4 of 9.** Contracts, the guarded HTTP layer, discovery and document
+> processing: a fuzzy product name resolves to a product, to its official ACBA sources, and
+> those sources are now parsed into clean pages, tables and sections - with OCR competing
+> against the parser page by page. No retrieval or model calls yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design and the roadmap.
 
 ---
@@ -34,7 +35,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the checks
 
 ```bash
-pytest                            # 172 tests, none of which touch the network
+pytest                            # 223 tests, none of which touch the network
 ruff check src tests              # lint + docstring rules
 mypy                              # strict type checking of src/
 ```

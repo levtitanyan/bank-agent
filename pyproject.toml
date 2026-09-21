@@ -73,6 +73,17 @@ files = ["src"]
 module = "defusedxml.*"
 ignore_missing_imports = true
 
+# PyMuPDF and pytesseract ship no type information. Their surfaces are wrapped
+# in documents/pdf.py and documents/ocr.py, which expose typed functions, so the
+# untypedness stops at that boundary rather than spreading.
+[[tool.mypy.overrides]]
+module = ["pytesseract.*", "PIL.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tariff_agent.documents.pdf"
+disallow_untyped_calls = false
+
 [[tool.mypy.overrides]]
 module = "tests.*"
 strict = false

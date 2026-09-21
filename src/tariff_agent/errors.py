@@ -95,6 +95,19 @@ class DocumentError(TariffAgentError):
     """A downloaded document could not be parsed, OCR'd or cleaned."""
 
 
+class PdfParseError(DocumentError):
+    """A PDF could not be opened or read - corrupt, encrypted or empty."""
+
+
+class OcrUnavailableError(DocumentError):
+    """OCR was needed but Tesseract could not be used.
+
+    Handled rather than raised in most paths: a document that cannot be OCR'd
+    is marked for review with whatever text the parser produced, since a poor
+    reading a human can check beats no reading at all.
+    """
+
+
 class ProductNotFoundError(TariffAgentError):
     """The user's product query could not be resolved to a known product."""
 

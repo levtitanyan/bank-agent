@@ -616,6 +616,136 @@ one document from — neither of which I would have invented.
 
 ---
 
+# Phase 4 — Document processing
+
+*Turning fetched bytes into clean, structured, quotable text. Nothing here
+interprets a tariff.*
+
+### P4-D1 · OCR is a peer strategy, not a fallback
+**Requirement:** 5.4 · **File:** [`documents/strategies.py`](../src/tariff_agent/documents/strategies.py)
+
+Reconnaissance on the real mortgage information summary - the authoritative document for that
+product - found its text layer broken four different ways:
+
+| Reading | Result |
+|---|---|
+| `get_text()` flat | 1,593 chars, **one word per line** (40 of 81 lines) |
+| `get_text("blocks")` | words **glued**: «Անշարժգույքիձեռքբերմանհիփոթեքային…» |
+| `get_text("dict")` | **53 of 1,593 characters** |
+| `get_text("words")` | one word per line, and `1,000,000` came back as `0,000,000` |
+| **OCR at 300 dpi** | **201 words, 91.9% mean confidence**, amounts intact |
+
+| Option | Consequence |
+|---|---|
+| Parse, and OCR only on failure | The parse does not *fail* here - it returns plausible-looking text with a digit missing, which is worse than failing |
+| **Chosen: run both and measure** | The better reading wins per page. On this document OCR usually wins, and that is normal operation, not an error |
+
+`needs_review` fires only when the *winner* is below the quality floor.
+
+### P4-D2 · Confidence is a gate, score is the decision
+**Requirement:** 5.4 · 5.8
+
+Tesseract's mean word confidence and the text score measure different things and are not
+comparable, so they are never combined. Below the configured confidence an OCR candidate is
+ineligible however good its text looks; above it, it competes on text score alone. A tie goes
+to the parser: cheaper, and it gets «և» right where Tesseract does not.
+
+### P4-D3 · Score before joining lines
+**Requirement:** 5.4 · 5.8
+
+The bug this prevents was real and silent: cleaning ran first, `join_broken_lines` turned
+one-word-per-line text into prose, and the corrupted page scored a **perfect 1.00** - so the
+parser beat OCR and the document was accepted with «50 0,000,000» where two separate amounts
+belonged. Candidates are now scored with their line structure intact, and only the winner is
+joined. Splitting `clean_page_text` into `prepare_for_scoring` and `finish_page_text` is what
+makes that possible.
+
+### P4-D4 · Quality is a weighted score with explicit fatal defects
+**Requirement:** 5.4 · 5.13 · **File:** [`documents/quality.py`](../src/tariff_agent/documents/quality.py)
+
+A plain weighted average let text fail two signals and still score 0.75 - mojibake scored 0.65.
+Five signals now feed a base score, and four **named defects** (`too_short`, `glued_words`,
+`one_word_per_line`, `few_letters`, `unreadable_characters`) apply multipliers. Good Armenian
+prose scores 1.00; every observed failure scores below 0.25. The defect names are reported, so
+a low score can be explained in a log line instead of being an opaque number.
+
+### P4-D5 · Cleaning never touches table cells
+**Requirement:** 5.4
+
+Line joining and duplicate removal are right for prose and destructive for a table, where a
+repeated short line is «0%» in another row. Tables are extracted separately, structurally, and
+cleaned only with `clean_cell` - character normalization and whitespace, nothing else.
+
+### P4-D6 · Numbers are barely touched
+**Requirement:** 5.4 · 5.8
+
+Only unambiguous thousand groups are rejoined. «10 59 10 10» in the real mortgage summary is a
+**phone number**, and its two-digit groups do not match the rule; «13, 5» may be a list.
+Deciding what a number means is Phase 6's job, and a cleaner that guesses invents values.
+
+### P4-D7 · «և» is preserved exactly
+**Requirement:** 5.4
+
+It appears 144 times across the two real PDFs; «եւ» appears zero times. Treating it as
+whitespace or rewriting it would break «տեղեկատվական» and every synonym containing it. Any
+equivalence between the spellings belongs to retrieval-time folding in Phase 5, not to stored
+text. **Known defect:** Tesseract's Armenian model reads և as ն («Տևողություն» → «Տնողություն»)
+while the parser gets it right. Digits are unaffected, so extracted values are sound; term
+matching suffers, which is the Phase 5 problem to solve.
+
+### P4-D8 · Furniture removal runs before line joining
+**Requirement:** 5.4
+
+Headers and footers are matched line by line, so joining first merges the header into the first
+body line and makes it unmatchable. The window also scales with the page: a fixed three-line
+window covers a short page entirely, and body text then "repeats at the edge" of every page.
+**Limitation:** content that is genuinely identical at the edge of every page is
+indistinguishable from a footer, and will be removed.
+
+### P4-D9 · Detected tables must look like tables
+**Requirement:** 5.4 · 5.5
+
+PyMuPDF reports cells like `['ն','և','','']` on the graphics-heavy mortgage page - fragments of
+a word split across invisible column boundaries. A junk table in the index is worse than a
+missing one, because it will be retrieved and quoted with a page number that makes it look
+authoritative. A table is kept only if it has enough rows, columns and non-empty cells.
+
+### P4-D10 · HTML takes the whole content container
+**Requirement:** 5.4 · 5.3
+
+Two attempts failed before this one. An allow-list of `p`/`li`/`td` tags dropped text held in
+divs and spans; then a "densest container" heuristic that discounted nested containers picked a
+3.6 KB leaf out of 10.6 KB of content and **lost 19 of 21 interest-rate mentions**. The rule is
+now blunt: strip the chrome, prefer a substantial `<main>` or `<article>`, otherwise take the
+body. Losing content silently is much worse than keeping a little boilerplate, which retrieval
+can ignore. The real pages now yield 19 and 26 rate mentions with their percentages.
+
+### P4-D11 · An HTML document has one page, and no page number
+**Requirement:** 5.7
+
+Internally it is `Page(number=1)`, so every downstream code path is uniform. But
+`Document.evidence_page()` returns `None` for HTML, because a page number in the evidence must
+be verifiable, and an HTML page has none.
+
+### P4-D12 · Identity is the content hash
+**Requirement:** 5.5 · 5.9
+
+`doc_id` is the sha256 of the fetched bytes, closing the gap left in Phase 2: ACBA serves
+`loans-tariffs.pdf` from three URLs, and without this it would be indexed three times and a
+change in one copy would look like three changes.
+
+### P4-D13 · Synthetic PDF fixtures, real scanned sample
+**Requirement:** 5.14 · 5.4
+
+The plan was to commit two real pages of the mortgage summary. They cannot be trimmed: the page
+carries 107 images, and every way of extracting it either keeps the file at ~2 MB or rewrites
+the content stream and **destroys the very defect the fixture exists to capture** (the text
+layer drops from 1,593 characters to 72). So the defects are reproduced by small synthetic PDFs
+- one word per line, and known headers, footers and page numbers - and the real document is
+covered by the committed scanned sample under `data/samples/ocr/`, which the OCR test reads
+with the actual Tesseract binary and skips when it is absent.
+
+
 # Tooling decisions
 
 ### T-D1 · mypy strict on `src` only
@@ -651,7 +781,8 @@ review instead:
 | HITL decisions are not remembered | A new rival document will stop every run until `products.yaml` is edited; persisting reviewer choices belongs with the Phase 7 snapshot store (P3-D18) |
 | Cache is unbounded | No size limit, TTL or eviction, and writes are not atomic. A crash mid-write orphans a body file, which the next read treats as absent |
 | `Crawl-delay` is not read | Pacing is a fixed configured interval (P2-D22); robots.txt may ask for more |
-| Documents are deduplicated by URL | The content hash needed to collapse ACBA's three URLs for one PDF is computed but unused (P2-D13) |
+| Identical edge content looks like furniture | Content repeated at the top or bottom of every page is removed (P4-D8) |
+| Tesseract reads «և» as «ն» | Values are unaffected; term matching suffers until Phase 5 folds the spellings (P4-D7) |
 | JS-rendered links are invisible | ACBA is server-rendered enough today; a redesign would break discovery silently |
 | Product granularity | `consumer_loan` now means one purchasable product, not the family. Monitoring the others would mean more entries in `products.yaml`, not new code (P3-D20) |
 
@@ -664,7 +795,7 @@ review instead:
 | 5.1 | ADK agent | Phase 8 · deterministic/LLM split already drawn (P3-D1) |
 | 5.2 | Focused tools | Phase 8 · the functions they will wrap exist and are pure |
 | 5.3 | Official source discovery | ✅ P3-D1…D20, P1-D10, P2-D2 |
-| 5.4 | PDF / OCR processing | Phase 4 · Armenian normalization started (P3-D6) |
+| 5.4 | PDF / OCR processing | ✅ P4-D1…D13 — digital parse, OCR peer strategy, Armenian cleaning, tables, HTML |
 | 5.5 | Chunking and RAG | Phase 5 · per-field query terms exist (P1-D1) |
 | 5.6 | Structured extraction | Schema ✅ (P1-D1…D5); extraction Phase 6 |
 | 5.7 | Evidence and provenance | Model ✅ (P1-D6, P1-D7); populated Phase 6 |
@@ -674,5 +805,5 @@ review instead:
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 172 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 223 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |

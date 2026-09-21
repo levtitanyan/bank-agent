@@ -97,6 +97,51 @@ class HttpSettings(BaseModel):
         return agent
 
 
+class DocumentSettings(BaseModel):
+    """How documents are parsed, OCR'd and judged.
+
+    Attributes:
+        ocr_dpi: Render resolution for OCR. 300 is the usual floor for reliable
+            Armenian recognition.
+        ocr_languages: Tesseract language string. Armenian first, English second,
+            because the documents are Armenian with Latin fragments.
+        ocr_min_confidence: Mean word confidence below which an OCR result is
+            not eligible to win, whatever its text score. Confidence is a gate,
+            not a score - the two scales are not comparable.
+        ocr_max_pixels: Upper bound on the rendered image. A large page at 300
+            dpi is tens of megapixels; the dpi is reduced rather than letting a
+            document dictate our memory use.
+        quality_floor: Below this score, even the best available text is marked
+            for human review.
+        min_chars_per_page: Length at which a page's length signal is satisfied.
+        max_pages: Pages processed per document.
+        furniture_ratio: Fraction of pages a line must repeat on to count as a
+            header or footer.
+        dedupe_min_chars: Minimum paragraph length considered for duplicate
+            removal, so repeated «0%» cells survive.
+        table_min_rows: Minimum rows for a detected table to be kept.
+        table_min_cols: Minimum columns for a detected table to be kept.
+        table_min_filled: Fraction of cells that must be non-empty. PyMuPDF
+            reports junk tables on graphics-heavy pages, and junk in the index
+            is worse than a missing table.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ocr_dpi: int = Field(default=300, ge=72, le=600)
+    ocr_languages: str = "hye+eng"
+    ocr_min_confidence: float = Field(default=60.0, ge=0, le=100)
+    ocr_max_pixels: int = Field(default=40_000_000, gt=0)
+    quality_floor: float = Field(default=0.35, ge=0, le=1)
+    min_chars_per_page: int = Field(default=200, gt=0)
+    max_pages: int = Field(default=60, ge=1, le=500)
+    furniture_ratio: float = Field(default=0.6, gt=0, le=1)
+    dedupe_min_chars: int = Field(default=120, gt=0)
+    table_min_rows: int = Field(default=2, ge=1)
+    table_min_cols: int = Field(default=2, ge=1)
+    table_min_filled: float = Field(default=0.5, ge=0, le=1)
+
+
 class Settings(BaseSettings):
     """Environment-provided settings.
 
@@ -113,6 +158,8 @@ class Settings(BaseSettings):
             unset, which is valid: offline demos and tests run without a key.
         http: Network limits for the HTTP layer, overridable with the
             ``TARIFF_HTTP__`` prefix (see :class:`HttpSettings`).
+        documents: Parsing, OCR and quality settings, overridable with the
+            ``TARIFF_DOCUMENTS__`` prefix (see :class:`DocumentSettings`).
         use_vertexai: Whether the google-genai SDK should talk to Vertex AI
             instead of AI Studio (env ``GOOGLE_GENAI_USE_VERTEXAI``). False here:
             this project authenticates with an AI Studio key. Declared so the
@@ -134,6 +181,7 @@ class Settings(BaseSettings):
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
     use_vertexai: bool = Field(default=False, alias="GOOGLE_GENAI_USE_VERTEXAI")
     http: HttpSettings = Field(default_factory=HttpSettings)
+    documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
     @property
     def has_api_key(self) -> bool:
