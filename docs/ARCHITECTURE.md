@@ -241,37 +241,17 @@ logged** — decisions and their inputs and outputs only.
 
 ## 4. Design decisions
 
-| # | Decision | Alternative rejected | Why |
-|---|---|---|---|
-| D1 | One field registry | Declare fields per stage | Four copies of the same list drift; adding a field must touch one file |
-| D2 | Invariants in validators | Rely on prompt instructions | Prompt wording drifts between model versions; a validator does not |
-| D3 | `NOT_FOUND` string sentinel | `None` | Survives JSON → SQLite → report; `None` is ambiguous |
-| D4 | Keep `value` verbatim **and** `normalized` | Store only the normalized form | The report must show the bank's own wording; the diff needs a canonical form |
-| D5 | Strict registry coverage on fresh extractions | Accept partial output | "Dropped by a bug" and "not offered by the bank" must look different |
-| D6 | Lenient `from_stored()` + `schema_version` | One strict path for everything | Otherwise adding a field breaks every stored snapshot and crashes the diff |
-| D7 | Per-field `unverified`/`conflict`; run-level `NeedsReviewError` | A `needs_review` field status | "Stop and ask a human" is a property of the run, not of one value |
-| D8 | `confidence` computed deterministically, `None` until then | The model's self-reported confidence | LLM confidence is not calibrated; a fake 1.0 is worse than an honest blank |
-| D9 | Policy in YAML, secrets in env | Everything in one place | The network surface must be reviewable; secrets must not be committed |
-| D10 | Exact hosts, no wildcard subdomains | `*.acba.am` | A hijacked or user-content subdomain would be reachable |
-| D11 | Google env vars unprefixed | Rename to `TARIFF_*` | The SDK reads those exact names; renaming buys nothing and breaks the SDK |
-| D12 | Exception per failure mode | One error class + message text | Retry logic must branch on type, not on English strings |
-| D13 | JSON logs + `ContextVar` run id | Plain logs, pass `run_id` around | Metrics must be computable; signatures stay clean |
-| D14 | `Allowlist` is data, no methods | Give it an `is_allowed()` | Matching must run per redirect hop — that is the HTTP layer's job |
-| D15 | Python 3.11 | System Python 3.14 | No reliable PyMuPDF / google-adk wheels on 3.14 yet |
-| D16 | Manual redirect loop | `follow_redirects=True` | Automatic redirects would leave the bank's domain without ever telling us |
-| D17 | robots.txt: 4xx allows, 5xx stops | Blanket fail-open or fail-closed | Fail-open ignores a real signal; fail-closed makes the agent hostage to one file |
-| D18 | Cache revalidates every run | Serve cached bytes when present | A monitor that never asks the server cannot detect a change |
-| D19 | `sleep` and `transport` injected | Patch `time.sleep` in tests | Explicit seams keep the retry tests instant and honest |
-| D20 | 403 never retried | Retry all failures | An access decision is respected, not hammered |
-| D21 | mypy strict on `src` only | Strict everywhere | Tests pass plain strings where pydantic coerces them — that is the behaviour under test, not a type error |
-| D22 | Deterministic product resolution | Ask Gemini which product was meant | A wrong resolution silently reports another product's tariffs; this decision must be reproducible offline and explainable in one log line |
-| D23 | Synonym dictionary + fuzzy + penalty | Fuzzy matching alone | "business mortgage" contains "mortgage" and scores 100 — similarity alone cannot represent "we do not monitor that" |
-| D24 | Resolution returns a status, never raises | Raise `ProductNotFoundError` | The ambiguous case is data for a reviewer, and agent tools must not raise into the model |
-| D25 | Primary + supporting sources | A single best source | The consumer-loan page holds its own rates while the shared tariff PDF outscores it; both are needed |
-| D26 | Role before score when choosing the primary | Rank by score alone | A document covering every loan product is never one product's authoritative source, however well it scores |
-| D27 | Scoring weights in YAML | Constants in Python | The Armenian keywords are policy a bank-side reviewer should be able to read and correct |
-| D28 | `defusedxml` for the sitemap | `lxml` / stdlib ElementTree | Entity expansion turns a few hundred bytes into gigabytes of memory |
-| D29 | Two close summaries → review | Pick the higher score | Purchase vs renovation mortgage is a coin flip on which product's rates get reported |
+Every decision — with the options rejected, the reason, the requirement it serves and its cost —
+is in **[DECISIONS.md](DECISIONS.md)**, grouped by phase. The six that shape everything else:
+
+| | Decision | In one line |
+|---|---|---|
+| P1-D2 | Invariants in validators, not the prompt | A value that cannot cite a source cannot be constructed |
+| P1-D1 | One field registry | Adding an eleventh tariff field touches one file |
+| P2-D4 | Manual redirect loop | `follow_redirects=True` would make the allowlist decorative |
+| P2-D11 | The cache revalidates, never short-circuits | A monitor that never asks the server cannot detect a change |
+| P3-D10 | Primary **plus** supporting sources | The consumer-loan page holds its own rates; a single winner reports the wrong document |
+| P3-D2 | Synonyms + fuzzy + penalty list | `token_set_ratio("business mortgage", "mortgage")` is 100 |
 
 ## 5. Test strategy
 
