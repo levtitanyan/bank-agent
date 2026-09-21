@@ -507,15 +507,28 @@ def test_armenian_text_survives_json_logging() -> None:
     assert json.loads(line)["value"] == "Անվանական տոկոսադրույք՝ 13,5%"
 
 
-# --------------------------------------------------------------------------- #
-# TODO(levon): write this one yourself - it is the likely live-review question.
-#
-# Build a snapshot payload with _stored_payload(), delete one field from
-# payload["fields"] (service_fee is a good choice - it simulates a snapshot
-# written before that field was added to the registry), load it with
-# TariffExtraction.from_stored(), and assert that:
-#   * the field is present again,
-#   * its value is the NOT_FOUND sentinel,
-#   * its status is FieldStatus.NOT_FOUND,
-#   * the other fields are untouched.
-# --------------------------------------------------------------------------- #
+def test_old_snapshot_missing_a_field_comes_back_as_not_found() -> None:
+    """A snapshot written before a field existed must still load and diff.
+
+    This is the migration case that matters in practice: the registry gains an
+    eleventh field, and every snapshot already in SQLite lacks it. Loading must
+    fill the gap with the explicit NOT_FOUND sentinel - never with a guess, and
+    never by refusing to load - so the next diff still has a baseline.
+    """
+    payload = _stored_payload()
+    del payload["fields"]["service_fee"]  # type: ignore[attr-defined]
+
+    restored = TariffExtraction.from_stored(payload)
+
+    backfilled = restored.fields["service_fee"]
+    assert backfilled.value == NOT_FOUND
+    assert backfilled.status is FieldStatus.NOT_FOUND
+    assert backfilled.evidence is None
+    assert backfilled.confidence is None
+    assert "service_fee" in restored.not_found_field_ids
+
+    # the rest of the snapshot is untouched
+    assert set(restored.fields) == set(FIELD_IDS)
+    assert restored.fields["nominal_rate"].value == "13,5%"
+    assert restored.fields["nominal_rate"].evidence is not None
+    assert restored.found_field_ids == ("nominal_rate",)
