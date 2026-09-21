@@ -42,7 +42,9 @@ class HttpSettings(BaseModel):
 
     Attributes:
         connect_timeout: Seconds to wait for the TCP/TLS connection.
-        read_timeout: Seconds to wait for response data.
+        read_timeout: Seconds to wait for response data. 60 rather than 30
+            because a live run showed acba.am taking longer than that to serve
+            the 1 MB tariff PDF, which cost a retry on every fetch.
         max_redirects: Redirect hops followed before giving up. Each hop is
             re-checked against the allowlist.
         max_download_bytes: Hard cap on bytes read from one response, enforced
@@ -62,7 +64,7 @@ class HttpSettings(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     connect_timeout: float = Field(default=5.0, gt=0)
-    read_timeout: float = Field(default=30.0, gt=0)
+    read_timeout: float = Field(default=60.0, gt=0)
     max_redirects: int = Field(default=5, ge=0, le=20)
     max_download_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
     max_attempts: int = Field(default=3, ge=1, le=10)

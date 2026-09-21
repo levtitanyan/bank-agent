@@ -81,11 +81,11 @@ def build(
     )
 
 
-def pdf_response(**kwargs: object) -> httpx.Response:
-    """A well-formed PDF response."""
-    headers = {"content-type": "application/pdf"}
-    headers.update(kwargs.pop("headers", {}))  # type: ignore[arg-type]
-    return httpx.Response(200, content=PDF_BYTES, headers=headers, **kwargs)  # type: ignore[arg-type]
+def pdf_response(headers: dict[str, str] | None = None) -> httpx.Response:
+    """A well-formed PDF response, with optional extra headers."""
+    all_headers = {"content-type": "application/pdf"}
+    all_headers.update(headers or {})
+    return httpx.Response(200, content=PDF_BYTES, headers=all_headers)
 
 
 # --------------------------------------------------------------------------- #

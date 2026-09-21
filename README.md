@@ -31,10 +31,18 @@ cp .env.example .env              # then add your AI Studio key to GOOGLE_API_KE
 `.env` is gitignored. `.env.example` is the committed template and holds no secrets.
 Running without a key is supported — offline demos and tests use a mock path.
 
-## Run the tests
+## Run the checks
 
 ```bash
 pytest                            # 98 tests, none of which touch the network
+ruff check src tests              # lint + docstring rules
+mypy                              # strict type checking of src/
+```
+
+OCR in Phase 4 will additionally need Tesseract with Armenian:
+
+```bash
+brew install tesseract tesseract-lang     # provides hye + eng
 ```
 
 ## Demo

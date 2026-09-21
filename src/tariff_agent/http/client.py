@@ -410,7 +410,7 @@ class SafeHttpClient:
                 logger.info("document_unchanged", extra={"url": url, "status": 304})
                 return self._result_from_cache(requested_url, cached, from_cache=True, url=url)
             if response.is_redirect:
-                location = response.headers.get("location")
+                location = str(response.headers.get("location") or "")
                 if not location:
                     raise FetchError(f"redirect from {url} without a Location header")
                 response.close()
@@ -536,9 +536,10 @@ class SafeHttpClient:
             Seconds to sleep.
         """
         if retry_after is not None:
-            return min(retry_after, self._settings.backoff_max)
-        base = self._settings.backoff_base * (2 ** (attempt - 1))
-        return min(base, self._settings.backoff_max) * (1 + random.random() * 0.1)
+            return float(min(retry_after, self._settings.backoff_max))
+        base: float = self._settings.backoff_base * (2.0 ** (attempt - 1))
+        capped: float = min(base, self._settings.backoff_max)
+        return capped * (1 + random.random() * 0.1)
 
     # ------------------------------------------------------------------- cache
 

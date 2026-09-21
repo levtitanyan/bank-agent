@@ -7,6 +7,7 @@ permission is unknown and the run stops.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -28,7 +29,10 @@ Allow: /
 """
 
 
-def routed(robots: httpx.Response, page: httpx.Response) -> tuple[object, list[str]]:
+Handler = Callable[[httpx.Request], httpx.Response]
+
+
+def routed(robots: httpx.Response, page: httpx.Response) -> tuple[Handler, list[str]]:
     """Build a handler answering robots.txt and page requests separately."""
     seen: list[str] = []
 

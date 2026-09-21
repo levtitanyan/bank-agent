@@ -60,6 +60,15 @@ ignore = ["D203", "D213"]
 convention = "google"
 
 [tool.mypy]
+# Strict on shipped code. Tests deliberately pass plain strings where pydantic
+# coerces them (that is what production callers do and what the tests verify),
+# so they are checked with `disallow_untyped_defs` only, via the override below.
 python_version = "3.11"
 strict = true
 mypy_path = "src"
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+strict = false
+disallow_untyped_defs = true

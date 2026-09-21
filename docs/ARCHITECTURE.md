@@ -220,6 +220,7 @@ logged** — decisions and their inputs and outputs only.
 | D18 | Cache revalidates every run | Serve cached bytes when present | A monitor that never asks the server cannot detect a change |
 | D19 | `sleep` and `transport` injected | Patch `time.sleep` in tests | Explicit seams keep the retry tests instant and honest |
 | D20 | 403 never retried | Retry all failures | An access decision is respected, not hammered |
+| D21 | mypy strict on `src` only | Strict everywhere | Tests pass plain strings where pydantic coerces them — that is the behaviour under test, not a type error |
 
 ## 5. Test strategy
 
