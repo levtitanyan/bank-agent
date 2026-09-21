@@ -36,6 +36,7 @@ htmlcov/
 data/cache/
 data/index/
 data/snapshots/
+data/runs/
 logs/
 *.db
 *.sqlite3

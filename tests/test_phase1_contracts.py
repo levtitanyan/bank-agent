@@ -532,3 +532,66 @@ def test_old_snapshot_missing_a_field_comes_back_as_not_found() -> None:
     assert restored.fields["nominal_rate"].value == "13,5%"
     assert restored.fields["nominal_rate"].evidence is not None
     assert restored.found_field_ids == ("nominal_rate",)
+
+
+# --------------------------------------------------------------------------- #
+# Per-run log files
+# --------------------------------------------------------------------------- #
+
+
+def test_each_run_writes_its_own_log_file(tmp_path: Path) -> None:
+    """One run's audit trail is one file, named by its run id."""
+    import logging
+
+    from tariff_agent.observability.logging import configure_logging, run_log_path
+
+    configure_logging("INFO", runs_dir=tmp_path)
+    try:
+        with run_context("run-aaa1"):
+            logging.getLogger("tariff_agent.test").info(
+                "document_fetched", extra={"url": "https://acba.am/hy"}
+            )
+        with run_context("run-bbb2"):
+            logging.getLogger("tariff_agent.test").info("product_resolved")
+
+        first = tmp_path / "run-aaa1" / "log.jsonl"
+        second = tmp_path / "run-bbb2" / "log.jsonl"
+        assert first.exists() and second.exists()
+        assert run_log_path("run-aaa1") == first
+
+        lines = [json.loads(line) for line in first.read_text(encoding="utf-8").splitlines()]
+        assert [entry["event"] for entry in lines] == ["document_fetched"]
+        assert lines[0]["run_id"] == "run-aaa1"
+        assert lines[0]["url"] == "https://acba.am/hy"
+        assert "run-bbb2" not in first.read_text(encoding="utf-8")
+    finally:
+        configure_logging("INFO")
+
+
+def test_file_logging_is_off_until_it_is_armed(tmp_path: Path) -> None:
+    """Importing the package must never create directories of its own."""
+    import logging
+
+    from tariff_agent.observability.logging import configure_logging, run_log_path
+
+    configure_logging("INFO")
+    assert run_log_path("run-none") is None
+    with run_context("run-none"):
+        logging.getLogger("tariff_agent.test").info("nothing_written")
+    assert not any(tmp_path.iterdir())
+
+
+def test_a_run_log_handler_is_removed_after_the_run(tmp_path: Path) -> None:
+    """A finished run must not keep receiving another run's lines."""
+    import logging
+
+    from tariff_agent.observability.logging import configure_logging
+
+    configure_logging("INFO", runs_dir=tmp_path)
+    try:
+        before = len(logging.getLogger().handlers)
+        with run_context("run-ccc3"):
+            assert len(logging.getLogger().handlers) == before + 1
+        assert len(logging.getLogger().handlers) == before
+    finally:
+        configure_logging("INFO")

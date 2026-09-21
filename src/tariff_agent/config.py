@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     Attributes:
         gemini_model: Model id used for extraction (env ``TARIFF_GEMINI_MODEL``).
         log_level: Root log level (env ``TARIFF_LOG_LEVEL``).
+        runs_dir: Where each run's ``log.jsonl`` is written when file logging is
+            armed with ``configure_logging(runs_dir=...)``.
         google_api_key: AI Studio key (env ``GOOGLE_API_KEY``). ``None`` when
             unset, which is valid: offline demos and tests run without a key.
         http: Network limits for the HTTP layer, overridable with the
@@ -123,6 +125,7 @@ class Settings(BaseSettings):
 
     gemini_model: str = "gemini-2.5-flash-lite"
     log_level: str = "INFO"
+    runs_dir: Path = PROJECT_ROOT / "data" / "runs"
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
     use_vertexai: bool = Field(default=False, alias="GOOGLE_GENAI_USE_VERTEXAI")
     http: HttpSettings = Field(default_factory=HttpSettings)
