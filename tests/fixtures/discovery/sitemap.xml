@@ -2,13 +2,15 @@
 <!-- Trimmed copy of a REAL sitemap.
      Source: https://acba.am/sitemap.xml
      Fetched: 2026-09-21
-     Kept: the entries discovery must reason about - the two product pages,
-     sibling products, and the traps: a business product, an agro product, the
-     tariff archive, a calculator, an off-domain link, and the malformed <loc>
-     the real sitemap actually contains. The original lists 588 URLs. -->
+     Kept: the entries discovery must reason about - the two monitored products'
+     pages, sibling products, and the traps: a business product, an agro
+     product, the tariff archive, a calculator, an off-domain link, and the
+     malformed <loc> the real sitemap actually contains. The original lists
+     588 URLs. -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://acba.am/</loc></url>
   <url><loc>https://acba.am/hy/individual/loans/consumer-loans</loc></url>
+  <url><loc>https://acba.am/hy/individual/loan/consumer-loan--up-to-10mln</loc></url>
   <url><loc>https://acba.am/hy/individual/loan/online-consumer-loan</loc></url>
   <url><loc>https://acba.am/hy/individual/loan/purchase-mortgage</loc></url>
   <url><loc>https://acba.am/hy/individual/loan/renovation-mortgage</loc></url>

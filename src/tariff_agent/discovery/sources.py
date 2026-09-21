@@ -237,6 +237,18 @@ def score_candidate(
         if _fold(keyword.text) in folded_url or _fold(keyword.text) in folded_anchor:
             scored.add(keyword.weight, f"mentions {keyword.text!r}")
 
+    # Neighbouring products: ACBA's renovation-mortgage summary is a real
+    # official document, and a real distraction when monitoring the purchase
+    # mortgage. Without this it stays within the ambiguity band and stops every
+    # nightly run for a human decision that is already known.
+    for term in product.exclude_terms:
+        if _fold(term) in folded_url or _fold(term) in folded_anchor:
+            scored.add(scoring.product_exclude_weight, f"names another product {term!r}")
+            break
+
+    if product.canonical_page and folded_url == _fold(normalize_url(product.canonical_page)):
+        scored.add(scoring.canonical_page_bonus, "is the product's own page")
+
     for segment, weight in scoring.path_segments.items():
         if segment in folded_url:
             scored.add(weight, f"path contains {segment!r}")
@@ -323,6 +335,9 @@ def select_candidate_pages(
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
     seeds = [normalize_url(seed) for seed in product.seed_pages]
+    if product.canonical_page:
+        canonical = normalize_url(product.canonical_page)
+        seeds = [canonical, *(seed for seed in seeds if seed != canonical)]
     # Seeds are curated, so they keep guaranteed slots: a site with many
     # loosely-matching pages must not push the known-good page out of budget.
     budget = max(0, config.limits.max_pages - len(seeds))
@@ -361,6 +376,8 @@ def _harvest_page(
     title = soup.title.get_text(strip=True) if soup.title else page_url
     candidates: list[SourceCandidate] = []
     curated = {normalize_url(seed) for seed in product.seed_pages}
+    if product.canonical_page:
+        curated.add(normalize_url(product.canonical_page))
 
     score, reasons, role = score_candidate(
         page_url,

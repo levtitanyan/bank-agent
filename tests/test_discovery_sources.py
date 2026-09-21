@@ -38,7 +38,8 @@ CONSUMER = CATALOG.get("consumer_loan")
 MORTGAGE = CATALOG.get("mortgage")
 assert CONSUMER is not None and MORTGAGE is not None
 
-CONSUMER_PAGE = "https://acba.am/hy/individual/loans/consumer-loans"
+CONSUMER_CATEGORY_PAGE = "https://acba.am/hy/individual/loans/consumer-loans"
+CONSUMER_PAGE = "https://acba.am/hy/individual/loan/consumer-loan--up-to-10mln"
 CONSUMER_SUBPAGE = "https://acba.am/hy/individual/loan/online-consumer-loan"
 MORTGAGE_PAGE = "https://acba.am/hy/individual/loan/purchase-mortgage"
 RENOVATION_PAGE = "https://acba.am/hy/individual/loan/renovation-mortgage"
@@ -120,11 +121,14 @@ def test_seed_pages_keep_guaranteed_slots() -> None:
 
 
 def test_page_selection_works_without_a_sitemap() -> None:
-    """Seeds alone keep discovery running when the sitemap is unavailable."""
-    assert select_candidate_pages([], CONSUMER, CONFIG) == [
-        CONSUMER_PAGE,
-        "https://acba.am/hy/individual/loan/5G-loan",
-    ]
+    """Seeds alone keep discovery running when the sitemap is unavailable.
+
+    The pinned canonical page comes first, then the configured seeds.
+    """
+    pages = select_candidate_pages([], CONSUMER, CONFIG)
+    assert pages[0] == CONSUMER_PAGE
+    assert CONSUMER_CATEGORY_PAGE in pages
+    assert "https://acba.am/hy/individual/loan/5G-loan" in pages
 
 
 # --------------------------------------------------------------------------- #
@@ -234,32 +238,61 @@ def test_mortgage_primary_is_the_information_summary() -> None:
     assert result.primary.role is SourceRole.PRIMARY
 
 
-def test_consumer_primary_is_the_page_itself_with_the_tariff_pdf_supporting() -> None:
-    """The consumer page links no summary, so the page is the source.
+def test_consumer_primary_is_the_product_page_with_the_tariff_pdf_supporting() -> None:
+    """The consumer product links no summary, so its own page is the source.
 
     This is the case a naive "PDF beats HTML" rule gets wrong: the shared
     tariff list scores higher on keywords but is not this product's source.
     """
     client, _ = serve_fixtures(
         {
-            CONSUMER_PAGE: "consumer_loans_page.html",
+            CONSUMER_PAGE: "consumer_loan_10mln_page.html",
+            CONSUMER_CATEGORY_PAGE: "consumer_loans_page.html",
             CONSUMER_SUBPAGE: "online_consumer_loan_page.html",
         }
     )
     result = discover_product_sources(
-        client, CONSUMER, CONFIG, [CONSUMER_PAGE, CONSUMER_SUBPAGE]
+        client, CONSUMER, CONFIG, [CONSUMER_CATEGORY_PAGE, CONSUMER_SUBPAGE, CONSUMER_PAGE]
     )
     assert result.primary.url == CONSUMER_PAGE
     assert result.primary.kind is SourceKind.HTML
     assert any(TARIFFS_PDF_NAME in candidate.url for candidate in result.supporting)
 
 
-def test_two_close_information_summaries_require_review() -> None:
-    """Purchase and renovation summaries are both official and both plausible.
+def test_category_page_does_not_outrank_the_product_page() -> None:
+    """ACBA's consumer-loans page lists several products and states no EIR.
 
-    Both are real «տեղեկատվական ամփոփագիր» documents for a mortgage, linked
-    from sibling pages. Picking one automatically would be a coin flip on which
-    product's rates get reported, so this is the HITL case.
+    Four headline percentages and no «տարեկան փաստացի» cannot yield one honest
+    set of ten tariff fields, so the product's own page is pinned in
+    products.yaml and must win.
+    """
+    client, _ = serve_fixtures(
+        {
+            CONSUMER_PAGE: "consumer_loan_10mln_page.html",
+            CONSUMER_CATEGORY_PAGE: "consumer_loans_page.html",
+        }
+    )
+    result = discover_product_sources(
+        client, CONSUMER, CONFIG, [CONSUMER_CATEGORY_PAGE, CONSUMER_PAGE]
+    )
+    assert result.primary.url == CONSUMER_PAGE
+    assert CONSUMER_CATEGORY_PAGE in [c.url for c in result.supporting]
+    assert any("own page" in reason for reason in result.primary.reasons)
+
+
+def test_the_canonical_page_is_always_crawled() -> None:
+    """A pinned page must never be pushed out of the crawl budget."""
+    noise = [f"https://acba.am/hy/individual/loan/consumer-loan-{i}" for i in range(30)]
+    pages = select_candidate_pages(noise, CONSUMER, CONFIG)
+    assert CONSUMER_PAGE in pages
+
+
+def test_a_known_neighbouring_product_does_not_stop_every_run() -> None:
+    """The renovation summary is official, and known to be the wrong product.
+
+    Escalating to a human on every nightly run over a document we have already
+    identified is not human-in-the-loop, it is an alarm nobody will read. The
+    mortgage's exclude_terms name it, so it is scored down instead.
     """
     client, _ = serve_fixtures(
         {
@@ -268,6 +301,27 @@ def test_two_close_information_summaries_require_review() -> None:
         }
     )
     result = discover_product_sources(client, MORTGAGE, CONFIG, [MORTGAGE_PAGE, RENOVATION_PAGE])
+    assert result.primary.url == SUMMARY_PDF
+    assert not result.requires_review
+
+
+def test_two_genuinely_close_summaries_still_require_review() -> None:
+    """The mechanism must survive: an unrecognised rival still stops the run.
+
+    Modelled on the real pair before the renovation mortgage was named in
+    exclude_terms - two «տեղեկատվական ամփոփագիր» documents within ten points,
+    where choosing automatically is a coin flip on whose rates get reported.
+    """
+    unfiltered = MORTGAGE.model_copy(update={"exclude_terms": ()})
+    client, _ = serve_fixtures(
+        {
+            MORTGAGE_PAGE: "purchase_mortgage_page.html",
+            RENOVATION_PAGE: "renovation_mortgage_page.html",
+        }
+    )
+    result = discover_product_sources(
+        client, unfiltered, CONFIG, [MORTGAGE_PAGE, RENOVATION_PAGE]
+    )
     assert result.requires_review
     assert result.primary.url == SUMMARY_PDF
     assert RENOVATION_SUMMARY_PDF in [c.url for c in result.supporting]

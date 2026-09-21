@@ -52,6 +52,8 @@ scoring:
     "/calculators/": -40
 
   product_slug_match: 20      # URL slug fuzzily matches the product name
+  canonical_page_bonus: 25    # the product's own page, per products.yaml
+  product_exclude_weight: -40 # names a neighbouring product (per-product terms)
   seed_page_bonus: 8          # page is a curated seed in products.yaml
   pdf_bonus: 10               # a PDF is usually more authoritative than a page
   rate_mention_bonus: 15      # an HTML page that actually states տոկոսադրույք

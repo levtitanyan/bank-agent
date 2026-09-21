@@ -25,10 +25,15 @@ unsupported_terms:
   - вклад
 
 products:
+  # The monitored product is the unsecured consumer loan of up to 10M AMD.
+  # ACBA sells several consumer loans, and the category page merely lists them:
+  # it shows four headline percentages and never states an effective rate, so a
+  # single set of ten tariff fields cannot be extracted from it honestly.
   - id: consumer_loan
     kind: loan
     name_hy: Սպառողական վարկ
     name_en: Consumer loan
+    canonical_page: https://acba.am/hy/individual/loan/consumer-loan--up-to-10mln
     synonyms:
       hy:
         - սպառողական վարկ
@@ -54,10 +59,20 @@ products:
     seed_documents:
       - https://www.acba.am/files/loans-tariffs.pdf
 
+  # The monitored product is the purchase mortgage. ACBA publishes a separate
+  # information summary for the renovation mortgage, which is a different
+  # product with different rates - excluded by name so discovery does not stop
+  # for a human on every run over a document we already know is the wrong one.
   - id: mortgage
     kind: loan
     name_hy: Հիփոթեքային վարկ
     name_en: Mortgage
+    canonical_page: https://acba.am/hy/individual/loan/purchase-mortgage
+    exclude_terms:
+      - վերանորոգման
+      - վերանորոգում
+      - renovation
+      - ремонт
     synonyms:
       hy:
         - հիփոթեքային վարկ

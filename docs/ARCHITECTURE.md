@@ -3,9 +3,11 @@
 How the ACBA tariff monitoring agent is put together: the modules, the order they
 run in, and the decisions behind them.
 
-> **Current state: Phase 1 (contracts).** The package holds the vocabulary and the
-> rules every later phase speaks — no fetching, parsing or model calls yet. Sections
-> marked *(Phase N)* describe where each piece will be used.
+> **Current state: Phase 3 of 9.** Contracts, the guarded HTTP layer and discovery are
+> built: a fuzzy product name resolves to a product, and to the official ACBA pages and
+> documents that state its tariffs. Document processing, RAG, extraction, snapshots, HITL
+> and the ADK agent are not. Sections marked *(Phase N)* name the phase that built them;
+> anything describing a later phase is written in the future tense.
 
 ---
 
@@ -43,39 +45,65 @@ flowchart TD
     N --> O["Report: values, evidence, changes"]
 ```
 
-**What Gemini decides:** which product the user meant (assisted by fuzzy matching), which
-retrieved chunk answers a field, and what text to quote as evidence.
+**What Gemini will decide (Phase 6):** which retrieved chunk answers a given tariff field,
+and what text to quote as the evidence for it. That is the whole of it.
 
-**What code decides — never the model:** which domains may be fetched, whether a download
-is allowed by size and type, whether a quote really appears in the document, whether a
-value is well-formed, what counts as a meaningful change, and whether a human is needed.
+**What code decides — never the model:** which product the user meant (deterministic
+synonyms + fuzzy matching, [P3-D1](DECISIONS.md#p3-d1--product-resolution-is-deterministic--no-gemini)),
+which domains may be fetched, whether a redirect may be followed, whether a download is
+allowed by size and type, which source is authoritative, whether a quoted value really
+appears in the document, whether a value is well-formed, what counts as a meaningful
+change, and whether a human is needed.
 
-## 3. Module map (Phase 1)
+## 3. Module map
 
 ```
 config/                        version-controlled policy, readable without opening Python
   allowlist.yaml               the only fetchable hosts: acba.am, www.acba.am, https only
-  products.yaml                the two products, hy/en/ru synonyms, seed URLs
+  products.yaml                the two products: synonyms, canonical page, exclusions, seeds
+  discovery.yaml               source-ranking weights, including the negative ones
 src/tariff_agent/
   fields.py                    the tariff field registry — the spine of the project
   models.py                    Evidence / FieldValue / TariffExtraction + their invariants
   config.py                    env settings (SecretStr key) + typed YAML loaders
   errors.py                    one exception per failure mode
+  http/
+    url_policy.py              may this URL be fetched? — pure functions, no I/O
+    client.py                  SafeHttpClient: caps, manual redirects, revalidating cache
+    robots.py                  per-host robots.txt, fetched through the same client
+  discovery/
+    product_matcher.py         fuzzy product name -> product id, or a reviewer decision
+    sitemap.py                 defusedxml sitemap parsing, degrading to [] on failure
+    sources.py                 ranking pages and PDFs into primary + supporting sources
   observability/logging.py     single-line JSON logs with a per-run correlation id
 tests/
-  test_phase1_contracts.py     48 tests over the registry, config, invariants, migration
+  test_phase1_contracts.py     49 tests: registry, config, invariants, snapshot migration
+  test_url_policy.py           19 tests: lookalike hosts, schemes, encoding, relative links
+  test_http_client.py          25 tests: retries, caps, redirects, revalidation, offline
+  test_robots.py                5 tests: allow / disallow / 5xx stops the run
+  test_product_matcher.py      31 tests: hy/en/ru, typos, ambiguity, unsupported products
+  test_discovery_sources.py    29 tests: scoring, primary selection, budgets, HITL
+  fixtures/discovery/          trimmed REAL ACBA pages, headed with URL and fetch date
 ```
 
-Dependencies form two short chains and no cycles:
+Dependencies run one way, with no cycles:
 
 ```
-fields.py ──► models.py        errors.py ──► config.py       observability/logging.py
-(no imports)                   (no imports)                  (no imports)
-                     └──────── models.py also imports errors + logging
+fields.py ─┐                         errors.py ─┐
+           ├─► models.py                        ├─► config.py ─┐
+logging.py ┘                         logging.py ┘              │
+                                                               ▼
+                                              http/url_policy.py ─► http/client.py
+                                                                         ▲   │
+                                                          http/robots.py ┘   │
+                                                                             ▼
+                                        discovery/{product_matcher, sitemap, sources}.py
 ```
 
 The two modules everything imports — `fields.py` and `errors.py` — depend on nothing
-themselves, so they cannot break from a change elsewhere.
+themselves, so they cannot break from a change elsewhere. `robots.py` needs the client and
+the client needs a robots check, so the client depends on a two-line `Protocol` rather than
+on the module that imports it.
 
 ### `fields.py` — the registry
 
@@ -196,10 +224,20 @@ Selection order is **role first, then score**: only a candidate carrying a prima
 information summary, or a page that states rates itself) may lead. Supporting sources are then
 ranked by score alone, so the shared tariff PDF is not buried beneath sibling pages.
 
-When two *information summaries* score within 10 points — ACBA publishes separate ones for
-purchase and renovation mortgages — `requires_review` is set with both candidates. That is the
-assignment's "two plausible official PDFs" HITL case, produced by the real site rather than
-staged.
+Two refinements the real site forced, both in `products.yaml` rather than in code:
+
+* **A product may pin its `canonical_page`.** ACBA's consumer *category* page lists several
+  loans, shows four headline percentages and states no effective rate at all — one honest set
+  of ten tariff fields cannot come from it. The monitored product is therefore named exactly:
+  the unsecured consumer loan up to 10M AMD, whose own page carries a real rate table. The
+  category page stays as a supporting source.
+* **A product may name its neighbours in `exclude_terms`.** When two information summaries
+  score within 10 points, `requires_review` is set with both candidates — the assignment's
+  "two plausible official PDFs" case, produced by the real site rather than staged. But ACBA's
+  renovation-mortgage summary would trigger that on *every* run, over a document already known
+  to be the wrong product. Escalation that repeats nightly is an alarm nobody reads, so
+  «վերանորոգման» is excluded for the mortgage specifically. An unrecognised rival still stops
+  the run, which a test pins.
 
 ### `config.py` — split by who needs to audit it
 
@@ -270,7 +308,7 @@ a report) and lighter on plumbing:
 | HTTP client | 25 | 404/403 not retried, 5xx retried then succeeds, capped `Retry-After`, oversize aborted, mislabelled content rejected, off-domain redirect refused, 304 revalidation, offline mode |
 | robots.txt | 5 | disallowed path refused, 404 allows, 5xx stops the run, fetched once per host |
 | Product matching | 31 | hy/en/ru + transliterations, typos, «loan» ambiguity, business products refused, nonsense refused, NFC equivalence, determinism |
-| Discovery | 26 | sitemap traps and XML bombs, page-selection floors, keyword and path scoring, primary/supporting split, HITL on rival summaries, crawl budget, seed fallback, broken page mid-crawl |
+| Discovery | 29 | sitemap traps and XML bombs, page-selection floors, keyword and path scoring, primary/supporting split, canonical page beats category page, known neighbour suppressed but unknown rival still escalates, crawl budget, seed fallback, broken page mid-crawl |
 
 *(Phase 9)* adds an evaluation dataset measuring product-resolution accuracy, retrieval hit
 rate, field match, NOT_FOUND precision and evidence-verification rate.

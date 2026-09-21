@@ -164,6 +164,12 @@ class Product(BaseModel):
         name_hy: Official Armenian product name.
         name_en: English product name.
         synonyms: Language code -> alternative names, used by fuzzy resolution.
+        canonical_page: The one page that states this product's own tariffs.
+            Set when a bank category page lists several products and cannot
+            yield a single, honest set of tariff fields.
+        exclude_terms: Names of neighbouring products that would otherwise be
+            mistaken for this one, e.g. the renovation mortgage beside the
+            purchase mortgage. Penalized during source ranking.
         seed_pages: Known product pages, used when live discovery finds nothing.
         seed_documents: Known official PDFs, same fallback role.
     """
@@ -175,6 +181,8 @@ class Product(BaseModel):
     name_hy: str
     name_en: str
     synonyms: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    canonical_page: str | None = None
+    exclude_terms: tuple[str, ...] = ()
     seed_pages: tuple[str, ...] = ()
     seed_documents: tuple[str, ...] = ()
 
@@ -250,6 +258,10 @@ class DiscoveryScoring(BaseModel):
             can be the wrong one.
         path_segments: Structural signal from the URL path, e.g. ``/business/``.
         product_slug_match: Added when the URL slug matches the product name.
+        canonical_page_bonus: Added to the product's configured canonical page,
+            so a category page listing several products cannot outrank it.
+        product_exclude_weight: Subtracted when a candidate names a neighbouring
+            product listed in the product's ``exclude_terms``.
         seed_page_bonus: Added when the page is a curated seed. Small, so it
             breaks ties between sibling pages without overriding live signals.
         pdf_bonus: Added for PDFs, which are usually more authoritative.
@@ -269,6 +281,8 @@ class DiscoveryScoring(BaseModel):
     negative_keywords: tuple[ScoringKeyword, ...] = ()
     path_segments: dict[str, float] = Field(default_factory=dict)
     product_slug_match: float = 20.0
+    canonical_page_bonus: float = 25.0
+    product_exclude_weight: float = -40.0
     seed_page_bonus: float = 8.0
     pdf_bonus: float = 10.0
     rate_mention_bonus: float = 15.0

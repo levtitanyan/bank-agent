@@ -510,26 +510,64 @@ A site full of loosely-matching pages must not evict the curated page from the b
 live discovery finds nothing and seeds are used instead, candidates are flagged `is_seed` with
 a note, so a reviewer can tell curated fallback from live discovery.
 
-### P3-D18 · Two close information summaries require review
+### P3-D18 · Two close information summaries require review — but only once
 **Requirement:** 5.10 "two plausible official PDFs … a reviewer selects the correct one"
 
-ACBA publishes separate summaries for purchase (90) and renovation (80) mortgages. Picking the
-higher automatically is a coin flip on which product's rates get reported. Restricted to PDFs:
-sibling product pages routinely score alike and are not a real dilemma.
+ACBA publishes separate summaries for the purchase (90) and renovation (80) mortgages. Picking
+the higher automatically is a coin flip on which product's rates get reported, so an
+unrecognised rival within ten points sets `requires_review`. Restricted to PDFs: sibling
+product pages routinely score alike and are not a real dilemma.
 
-### P3-D19 · A broken page does not end the crawl
+**The bug this had:** as first written, that fired on *every* run, for a document we had
+already identified as the wrong product. Escalation that repeats nightly is not
+human-in-the-loop, it is an alarm nobody reads — and a reviewer who clicks through it once
+will click through the real one too. Fixed by P3-D19.
+
+**Still open:** the ranking now suppresses the *known* rival, but the reviewer's decision
+itself is not yet remembered. A genuinely new rival document will correctly stop the run —
+and will keep stopping it until someone edits `products.yaml`. Persisting HITL outcomes, so a
+resolved choice stays resolved, belongs to Phase 7 alongside the snapshot store.
+
+### P3-D19 · Neighbouring products are excluded per product, not globally
+**Requirement:** 5.3 · 5.10 · **File:** [`config/products.yaml`](../config/products.yaml)
+
+| Option | Consequence |
+|---|---|
+| A global `renovation` negative keyword | Wrong if the renovation mortgage is ever monitored as its own product — the term is only negative *relative to* the purchase mortgage |
+| Leave it to the reviewer each run | The recurring escalation above |
+| **Chosen: `exclude_terms` on the product** | «վերանորոգման» is negative for `mortgage` specifically, and the rule reads as what it is: "this is the neighbouring product, not mine" |
+
+### P3-D20 · A product may pin its canonical page
+**Requirement:** 5.3 · 5.6 · **File:** [`config/products.yaml`](../config/products.yaml)
+
+Discovery first chose ACBA's consumer **category** page, `/hy/individual/loans/consumer-loans`,
+which lists several consumer loans at once: four headline percentages, and no «տարեկան
+փաստացի» anywhere on it. One honest set of ten tariff fields cannot be extracted from a page
+describing several products — whose amount, whose term, whose effective rate?
+
+| Option | Consequence |
+|---|---|
+| Accept the category page | Extraction would have to pick among several products' numbers, and any answer would be arbitrary |
+| Extract several products from one page | A different product model (one page → many tariffs); out of scope, and not what the assignment asks |
+| **Chosen: `canonical_page` per product, with a +25 bonus and a guaranteed crawl slot** | The monitored product is stated explicitly: the unsecured consumer loan up to 10M AMD, whose own page has 31 rate mentions and a real rate table |
+
+This also sharpens the product definition itself, which was vague before: "consumer loan" now
+names one purchasable product rather than a family. The category page remains a supporting
+source.
+
+### P3-D21 · A broken page does not end the crawl
 **Requirement:** 5.11 404 / website unavailable
 
 One page failing is logged and skipped; the sources found elsewhere still stand. Only *no*
 sources at all raises `SourceNotFoundError` — missing data is reported, never quietly empty.
 
-### P3-D20 · The client owns the allowlist; link filtering reads it from there
+### P3-D22 · The client owns the allowlist; link filtering reads it from there
 **Requirement:** 5.12
 
 Discovery filters links with the same allowlist instance the client enforces, exposed as a
 property, rather than loading a second copy that could drift out of sync.
 
-### P3-D21 · Fixtures are trimmed **real** pages, with provenance headers
+### P3-D23 · Fixtures are trimmed **real** pages, with provenance headers
 **Requirement:** 5.14
 
 | Option | Consequence |
@@ -575,6 +613,8 @@ review instead:
 | Fixture staleness | Real fixtures date; the live script re-verifies, but they will need refreshing (P3-D21) |
 | `gemini-2.5-flash-lite` | Chosen for cost; lite is weaker at structured extraction from Armenian tables, which is Phase 6's hard part. One env var to change |
 | Scoring weights are hand-tuned | Validated against two products on one bank; the Phase 9 evaluation set should measure them |
+| HITL decisions are not remembered | A new rival document will stop every run until `products.yaml` is edited; persisting reviewer choices belongs with the Phase 7 snapshot store (P3-D18) |
+| Product granularity | `consumer_loan` now means one purchasable product, not the family. Monitoring the others would mean more entries in `products.yaml`, not new code (P3-D20) |
 
 ---
 
@@ -592,8 +632,8 @@ review instead:
 | 5.8 | Deterministic validation | Invariants ✅ (P1-D2, P1-D5); normalizers Phase 6 |
 | 5.9 | Change detection | Storage contract and revalidation ✅ (P1.5-D1, P2-D11); diff Phase 7 |
 | 5.10 | HITL | Triggers ✅ (P1-D15, P1.5-D4, P3-D4, P3-D18); reviewer interface Phase 7 |
-| 5.11 | Error handling | ✅ P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D19 |
-| 5.12 | Security | ✅ P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8 |
-| 5.13 | Observability | ✅ P1-D16, P3-D5, P3-D12 |
-| 5.14 | Testing | ✅ 155 tests, P2-D15, P3-D21; evaluation dataset Phase 9 |
-| 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 |
+| 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
+| 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
+| 5.13 | Observability | 🟡 structured logs, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
+| 5.14 | Testing | 🟡 168 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |
