@@ -76,12 +76,18 @@ class RobotsDisallowedError(FetchError):
     """robots.txt forbids fetching this URL, so we do not fetch it."""
 
 
-class RobotsUnavailableError(FetchError):
+class RobotsUnavailableError(TariffAgentError):
     """robots.txt could not be read, so permission is unknown.
 
     A missing file (4xx) means "no rules exist" and is not an error. This is
     raised only when the server failed to answer (5xx, timeout): permission is
     genuinely unknown, so the run stops rather than guessing in our own favour.
+
+    Deliberately **not** a :class:`FetchError`. Callers that crawl several pages
+    treat a failed fetch as "skip this page and carry on", and inheriting from
+    FetchError let those handlers swallow this one - turning a run-stopping
+    condition into a skipped page. Being outside that hierarchy makes the stop
+    unignorable unless someone catches it by name.
     """
 
 

@@ -106,3 +106,37 @@ def test_robots_can_be_switched_off_for_offline_fixtures(tmp_path: Path) -> None
     )
     client.fetch(PAGE_URL, expect=ContentKind.HTML)
     assert not any(url.endswith("/robots.txt") for url in seen)
+
+
+def test_unreadable_robots_stops_a_crawl_it_cannot_be_swallowed_by(
+    settings: HttpSettings,
+) -> None:
+    """The run-stopping condition must survive a per-page 'skip and carry on'.
+
+    Discovery skips a page that fails to fetch, which is right for a 404 and
+    wrong for "we do not know whether we are allowed here". RobotsUnavailableError
+    is therefore not a FetchError, so the per-page handler cannot catch it.
+    """
+    from tariff_agent.config import load_discovery_config, load_products
+    from tariff_agent.discovery.sources import discover_product_sources
+    from tariff_agent.errors import FetchError
+
+    product = load_products().get("mortgage")
+    assert product is not None
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        fetched.append(str(request.url))
+        if request.url.path == "/robots.txt":
+            return httpx.Response(503)
+        return httpx.Response(200, content=b"<html></html>", headers={"content-type": "text/html"})
+
+    client = build_client(
+        ALLOWLIST, settings, transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    with pytest.raises(RobotsUnavailableError):
+        discover_product_sources(client, product, load_discovery_config(), [PAGE_URL])
+
+    assert not issubclass(RobotsUnavailableError, FetchError)
+    # robots.txt was attempted (once per configured attempt); no product page was.
+    assert all(url.endswith("/robots.txt") for url in fetched)
