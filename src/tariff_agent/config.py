@@ -123,7 +123,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    gemini_model: str = "gemini-2.5-flash-lite"
+    gemini_model: str = "gemini-2.5-flash"
     log_level: str = "INFO"
     runs_dir: Path = PROJECT_ROOT / "data" / "runs"
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
