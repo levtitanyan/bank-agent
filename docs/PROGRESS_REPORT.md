@@ -1,8 +1,8 @@
 # ACBA Tariff Monitoring Agent — progress report
 
 **Status:** phases 1–3 of 9 complete (contracts · guarded HTTP · discovery).
-**Date:** 2026-09-21 · **Tests:** 168 passing, none touching the network · **Lint:** ruff clean ·
-**Types:** mypy strict clean on `src/` · **Code:** 3,180 lines source, 1,696 lines tests · 9 commits.
+**Date:** 2026-09-21 · **Tests:** 172 passing, none touching the network · **Lint:** ruff clean ·
+**Types:** mypy strict clean on `src/` · **Code:** ~3,400 lines source, ~1,900 lines tests · 14 commits.
 
 This report states what works, how it decides, and — in the second half — everything that does
 not work yet, including three defects found while preparing it.
@@ -258,26 +258,28 @@ from three different URLs.
 
 ## 7. Limitations
 
-### 7.1 Defects found while preparing this report
+### 7.1 Defects found by audit — all fixed
 
-| # | Defect | Effect | Fix |
+An audit while preparing this report found three defects. All three are fixed, each in its own
+commit with a test that fails if the defect returns.
+
+| # | Defect | Effect | Resolution |
 |---|---|---|---|
-| 1 | `RobotsUnavailableError` subclasses `FetchError`, and discovery catches `FetchError` per page (`sources.py:368`, `sitemap.py:82`) | The documented guarantee "a 5xx on robots.txt stops the run" is **silently defeated inside discovery**: the page is skipped and the crawl continues | Catch it before the generic handler, or stop subclassing `FetchError` |
-| 2 | `log.jsonl` is referenced in the decision log, but **nothing writes a log file** — logs go to stderr only | A claim in the documentation that the code does not support | Add a file handler, or correct the documentation |
-| 3 | `fetch_sitemap_urls()` does not recurse into a `<sitemapindex>`; it would return child *sitemap* URLs as if they were page URLs | Harmless for ACBA (a flat `<urlset>`), latent for any other bank | Recurse one level, or reject index sitemaps explicitly |
+| 1 | `RobotsUnavailableError` subclassed `FetchError`, and discovery catches `FetchError` per page so one broken page does not end a crawl | Together these **defeated a documented security guarantee**: a 503 on robots.txt was swallowed as "skip this page" and the crawl continued into a site we had no permission to read | Now a direct `TariffAgentError`, outside the hierarchy those handlers catch. A test asserts it is *not* a `FetchError`, so the inheritance cannot be reintroduced silently. `RobotsDisallowedError` stays a `FetchError` — skipping a disallowed page is correct |
+| 2 | `log.jsonl` was referenced in the decision log, but nothing wrote a log file | A documentation claim the code did not support | `configure_logging(runs_dir=…)` arms per-run files at `data/runs/<run_id>/log.jsonl`, same formatter, handler removed when the run ends. Off unless armed |
+| 3 | `fetch_sitemap_urls()` returned a `<sitemapindex>`'s entries as if they were page URLs | Latent — ACBA publishes a flat `<urlset>` — and a real bug at any bank that does not | The parser now reports `is_index` as data rather than leaving callers to guess. An index is followed one level through the same guarded client, capped at ten children; a nested index is refused |
 
-None affects the verified behaviour above, and all three are cheap to fix.
+Two further gaps named below were closed at the same time: requests to one host are now paced
+(default 1 s, per host, configurable), and `FetchResult` carries `checked_at` beside
+`retrieved_at`, so "last verified" and "last changed" are no longer the same number.
 
 ### 7.2 Design limitations (deliberate, with reasons)
 
-- **No rate limiting or `Crawl-delay` support.** Requests are back-to-back; a discovery run
-  makes ~7. Polite for this volume, insufficient for a larger crawl.
+- **`Crawl-delay` is not read.** Pacing is a fixed configured interval per host (default 1 s);
+  a robots.txt asking for more is not honoured.
 - **The cache is unbounded.** No size limit, TTL or eviction — currently 8.3 MB across 30
   entries. Writes are not atomic, so a crash mid-write can orphan a body file (harmless: the
   next read treats it as absent and re-fetches).
-- **No "last verified" timestamp.** A 304 reuses the stored `retrieved_at`, so the report can
-  say when a document was last *downloaded*, not when it was last *checked*. Phase 7 reporting
-  will want both.
 - **Duplicate documents are deduplicated by URL, not content.** ACBA serves
   `loans-tariffs.pdf` from three URLs; the content hash needed to collapse them is already
   computed but not yet used.
@@ -319,9 +321,9 @@ defence only exist once tools and prompts do), 5.13 observability (the run metri
 
 ### 7.5 Known risk ahead
 
-The configured model is `gemini-2.5-flash-lite`, chosen for cost. Extraction from Armenian
-tables is the hardest part of Phase 6, and flash-lite is the weakest model at exactly that. The
-intent is to switch to `gemini-2.5-flash` when Phase 6 begins — one environment variable.
+The configured model is now `gemini-2.5-flash`, switched from `flash-lite` before Phase 6:
+extraction from Armenian tariff tables is the hardest thing the system does, and flash-lite is
+weakest at exactly that. It remains one environment variable, so both can be compared in a demo.
 
 A second risk surfaced during Phase 4 reconnaissance: **the mortgage information summary's PDF
 text layer is unreliable.** Flat extraction yields one word per line; block extraction glues

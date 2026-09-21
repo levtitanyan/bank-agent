@@ -152,6 +152,12 @@ Refusing to decide alone is correct behaviour, not a bug. It carries a machine-r
 Anything passed as `extra={...}` becomes a top-level key. Armenian is written unescaped
 (`ensure_ascii=False`) so logs stay readable. **Chain-of-thought is never logged.**
 
+**Per-run files.** `configure_logging(runs_dir=...)` arms file logging, and each `run_context`
+block writes `<runs_dir>/<run_id>/log.jsonl` through the same formatter, so one run's audit
+trail is one attachable file. Off unless armed, so importing the package creates no directories
+and tests write nothing they did not ask for. (Until this was built, the documentation referred
+to a `log.jsonl` that did not exist — an overclaim found by audit.)
+
 ### P1-D17 · `Allowlist` is data with no methods
 **Requirement:** 5.2 least-privilege
 
@@ -370,6 +376,24 @@ becomes the bottleneck.
 An unwritable cache must not fail a run that already holds the bytes it needs. The failure is
 logged; the run continues.
 
+### P2-D22 · Requests to one host are paced
+**Requirement:** 5.3 do not overload the site · 5.12
+
+A run makes only a handful of requests, but they would otherwise arrive back to back. A
+minimum gap per **host** (not globally — politeness is owed to a server) uses the injected
+sleep, so tests observe the pause without serving it. This is also the floor a robots.txt
+`Crawl-delay` would raise, when that is implemented.
+
+### P2-D23 · `checked_at` beside `retrieved_at`
+**Requirement:** 5.9 · 5.13
+
+| Option | Consequence |
+|---|---|
+| One timestamp | "Last verified" and "last changed" collapse into one number, and a 304 makes it lie in one direction or the other |
+| **Chosen: `retrieved_at` when bytes arrived, `checked_at` when the bank was last asked** | A 304 moves only `checked_at`. A report claiming a tariff is current needs that one; a change log needs the other |
+
+Written back to the cache sidecar, so the confirmation survives between runs.
+
 ### P2-D21 · `read_timeout` raised 30 s → 60 s
 **Requirement:** 5.11 reasonable timeouts
 
@@ -440,6 +464,17 @@ library would be a dependency and a source of surprises for a handful of predict
 
 Stock XML parsers expand entities: a "billion laughs" document is a few hundred bytes on the
 wire and gigabytes in memory. A test feeds the parser exactly that.
+
+### P3-D9a · A sitemap index is followed, never crawled as pages
+**Requirement:** 5.3 · 5.11
+
+An index and a page list are indistinguishable by content — both are lists of `<loc>` elements —
+so the parser returns the distinction as data (`SitemapUrls.is_index`) rather than leaving the
+caller to guess. Originally the caller *did* guess, and would have handed discovery a list of
+XML files to crawl as product pages: latent at ACBA, which publishes a flat `<urlset>`, and a
+real bug at whichever bank does not. An index is now followed one level through the same guarded
+client, capped at ten children; an index nested inside an index is refused, being either a
+mistake or an invitation to crawl forever.
 
 ### P3-D9 · Sitemap failures degrade to `[]`
 **Requirement:** 5.11
@@ -614,6 +649,10 @@ review instead:
 | `gemini-2.5-flash-lite` | Chosen for cost; lite is weaker at structured extraction from Armenian tables, which is Phase 6's hard part. One env var to change |
 | Scoring weights are hand-tuned | Validated against two products on one bank; the Phase 9 evaluation set should measure them |
 | HITL decisions are not remembered | A new rival document will stop every run until `products.yaml` is edited; persisting reviewer choices belongs with the Phase 7 snapshot store (P3-D18) |
+| Cache is unbounded | No size limit, TTL or eviction, and writes are not atomic. A crash mid-write orphans a body file, which the next read treats as absent |
+| `Crawl-delay` is not read | Pacing is a fixed configured interval (P2-D22); robots.txt may ask for more |
+| Documents are deduplicated by URL | The content hash needed to collapse ACBA's three URLs for one PDF is computed but unused (P2-D13) |
+| JS-rendered links are invisible | ACBA is server-rendered enough today; a redesign would break discovery silently |
 | Product granularity | `consumer_loan` now means one purchasable product, not the family. Monitoring the others would mean more entries in `products.yaml`, not new code (P3-D20) |
 
 ---
@@ -634,6 +673,6 @@ review instead:
 | 5.10 | HITL | Triggers ✅ (P1-D15, P1.5-D4, P3-D4, P3-D18); reviewer interface Phase 7 |
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
-| 5.13 | Observability | 🟡 structured logs, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 168 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
+| 5.14 | Testing | 🟡 172 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |

@@ -34,7 +34,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the checks
 
 ```bash
-pytest                            # 168 tests, none of which touch the network
+pytest                            # 172 tests, none of which touch the network
 ruff check src tests              # lint + docstring rules
 mypy                              # strict type checking of src/
 ```
