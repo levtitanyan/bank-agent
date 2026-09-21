@@ -45,6 +45,11 @@ class Settings(BaseSettings):
         log_level: Root log level (env ``TARIFF_LOG_LEVEL``).
         google_api_key: AI Studio key (env ``GOOGLE_API_KEY``). ``None`` when
             unset, which is valid: offline demos and tests run without a key.
+        use_vertexai: Whether the google-genai SDK should talk to Vertex AI
+            instead of AI Studio (env ``GOOGLE_GENAI_USE_VERTEXAI``). False here:
+            this project authenticates with an AI Studio key. Declared so the
+            value is validated and visible in settings rather than being an
+            undocumented variable the SDK happens to read.
     """
 
     model_config = SettingsConfigDict(
@@ -57,6 +62,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.5-flash-lite"
     log_level: str = "INFO"
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
+    use_vertexai: bool = Field(default=False, alias="GOOGLE_GENAI_USE_VERTEXAI")
 
     @property
     def has_api_key(self) -> bool:

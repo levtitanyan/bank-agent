@@ -7,6 +7,7 @@ and the NOT_FOUND / registry-completeness invariants in the models hold.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,19 +16,32 @@ from pydantic import ValidationError
 
 from tariff_agent.config import (
     Allowlist,
+    Settings,
     load_allowlist,
     load_products,
 )
-from tariff_agent.errors import ConfigError
-from tariff_agent.fields import FIELD_IDS, REQUIRED_FIELD_IDS, TARIFF_FIELDS, get_field
+from tariff_agent.errors import ConfigError, SnapshotError
+from tariff_agent.fields import (
+    FIELD_IDS,
+    REQUIRED_FIELD_IDS,
+    TARIFF_FIELDS,
+    ValueKind,
+    get_field,
+)
 from tariff_agent.models import (
     NOT_FOUND,
+    SCHEMA_VERSION,
     Evidence,
     FieldStatus,
     FieldValue,
     TariffExtraction,
 )
-from tariff_agent.observability.logging import current_run_id, run_context
+from tariff_agent.observability.logging import (
+    JsonFormatter,
+    configure_logging,
+    current_run_id,
+    run_context,
+)
 
 # --------------------------------------------------------------------------- #
 # Field registry
@@ -173,19 +187,28 @@ def _evidence() -> Evidence:
 
 
 def test_not_found_helper_produces_the_sentinel() -> None:
-    """The canonical missing value carries no data and no evidence."""
+    """The canonical missing value carries no data, no evidence, no fake score."""
     value = FieldValue.not_found()
     assert value.value == NOT_FOUND
     assert value.status is FieldStatus.NOT_FOUND
     assert value.evidence is None
     assert value.normalized is None
+    assert value.confidence is None
     assert not value.is_found
+
+
+def test_confidence_defaults_to_none_not_a_made_up_score() -> None:
+    """Confidence is computed deterministically in Phase 6; until then it is unset."""
+    value = FieldValue(
+        value="13,5%", status=FieldStatus.FOUND, evidence=_evidence()
+    )
+    assert value.confidence is None
 
 
 def test_found_value_requires_evidence() -> None:
     """A value without a source location is not reportable."""
     with pytest.raises(ValidationError, match="no evidence"):
-        FieldValue(value="13.5%", status=FieldStatus.EXTRACTED, confidence=0.9)
+        FieldValue(value="13.5%", status=FieldStatus.FOUND, confidence=0.9)
 
 
 def test_not_found_value_must_not_carry_evidence() -> None:
@@ -204,7 +227,7 @@ def test_sentinel_and_status_must_agree() -> None:
     with pytest.raises(ValidationError, match="disagree"):
         FieldValue(
             value=NOT_FOUND,
-            status=FieldStatus.EXTRACTED,
+            status=FieldStatus.FOUND,
             confidence=0.9,
             evidence=_evidence(),
         )
@@ -230,6 +253,26 @@ def _extraction(fields: dict[str, FieldValue]) -> TariffExtraction:
     )
 
 
+def test_unverified_and_conflict_still_require_evidence() -> None:
+    """A questionable value must still say where it came from, or it is useless."""
+    for status in (FieldStatus.UNVERIFIED, FieldStatus.CONFLICT):
+        with pytest.raises(ValidationError, match="no evidence"):
+            FieldValue(value="13.5%", status=status)
+        assert FieldValue(value="13.5%", status=status, evidence=_evidence()).is_found is False
+
+
+def test_html_evidence_needs_no_page_number() -> None:
+    """HTML product pages have no pagination, and are first-class sources."""
+    evidence = Evidence(
+        document_name="Consumer loans | ACBA",
+        source_url="https://acba.am/hy/individual/loans/consumer-loans",
+        section="Տոկոսադրույքներ",
+        quote="Անվանական տոկոսադրույքը՝ 13,5%",
+    )
+    assert evidence.page is None
+    assert FieldValue(value="13,5%", status=FieldStatus.FOUND, evidence=evidence).is_found
+
+
 def test_extraction_requires_every_registry_field() -> None:
     """Silently dropping a field would hide a gap from the report."""
     fields = {fid: FieldValue.not_found() for fid in FIELD_IDS}
@@ -251,7 +294,7 @@ def test_extraction_splits_found_and_missing_fields() -> None:
     fields = {fid: FieldValue.not_found() for fid in FIELD_IDS}
     fields["nominal_rate"] = FieldValue(
         value="13,5%",
-        status=FieldStatus.EXTRACTED,
+        status=FieldStatus.FOUND,
         confidence=0.95,
         evidence=_evidence(),
     )
@@ -298,3 +341,181 @@ def test_json_formatter_emits_run_id_and_extras(caplog: pytest.LogCaptureFixture
     assert line["level"] == "INFO"
     assert line["run_id"] == "run-test1234"
     assert line["source_url"] == "https://acba.am/hy"
+
+
+# --------------------------------------------------------------------------- #
+# Stored snapshots: forward migration
+# --------------------------------------------------------------------------- #
+
+
+def _stored_payload() -> dict[str, object]:
+    """Build a snapshot payload as it would be read back from SQLite."""
+    fields = {fid: FieldValue.not_found() for fid in FIELD_IDS}
+    fields["nominal_rate"] = FieldValue(
+        value="13,5%", status=FieldStatus.FOUND, evidence=_evidence()
+    )
+    return json.loads(_extraction(fields).model_dump_json())
+
+
+def test_from_stored_round_trips_a_current_snapshot() -> None:
+    """A snapshot written by this version loads back unchanged."""
+    restored = TariffExtraction.from_stored(_stored_payload())
+    assert restored.schema_version == SCHEMA_VERSION
+    assert restored.found_field_ids == ("nominal_rate",)
+    assert restored.fields["nominal_rate"].value == "13,5%"
+
+
+def test_from_stored_drops_fields_no_longer_in_the_registry() -> None:
+    """A field removed from the registry must not block loading old data."""
+    payload = _stored_payload()
+    payload["fields"]["legacy_penalty_fee"] = {  # type: ignore[index]
+        "value": "0.1%",
+        "status": "found",
+        "evidence": _evidence().model_dump(mode="json"),
+    }
+    restored = TariffExtraction.from_stored(payload)
+    assert "legacy_penalty_fee" not in restored.fields
+    assert set(restored.fields) == set(FIELD_IDS)
+
+
+def test_from_stored_treats_unversioned_snapshots_as_version_zero() -> None:
+    """Snapshots written before versioning existed are still loadable."""
+    payload = _stored_payload()
+    del payload["schema_version"]
+    assert TariffExtraction.from_stored(payload).schema_version == 0
+
+
+def test_from_stored_rejects_a_payload_that_is_not_a_snapshot() -> None:
+    """Corrupt storage must fail as SnapshotError, not AttributeError."""
+    with pytest.raises(SnapshotError, match="no 'fields' mapping"):
+        TariffExtraction.from_stored({"bank": "ACBA Bank"})
+
+
+def test_from_stored_rejects_a_snapshot_with_broken_field_data() -> None:
+    """A value that violates the evidence invariant must not load silently."""
+    payload = _stored_payload()
+    payload["fields"]["term"] = {"value": "60 months", "status": "found"}  # type: ignore[index]
+    with pytest.raises(SnapshotError, match="could not be loaded"):
+        TariffExtraction.from_stored(payload)
+
+
+def test_strict_constructor_is_unaffected_by_the_lenient_loader() -> None:
+    """Leniency is for storage only; fresh model output stays strict."""
+    fields = {fid: FieldValue.not_found() for fid in FIELD_IDS}
+    del fields["service_fee"]
+    with pytest.raises(ValidationError, match="missing tariff fields"):
+        _extraction(fields)
+
+
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+
+
+def test_settings_read_prefixed_and_unprefixed_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """App vars use TARIFF_; the Google vars keep the names the SDK expects."""
+    monkeypatch.setenv("TARIFF_GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("TARIFF_LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-value")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert settings.gemini_model == "gemini-2.5-flash"
+    assert settings.log_level == "DEBUG"
+    assert settings.use_vertexai is True
+    assert settings.has_api_key
+
+
+def test_settings_never_expose_the_api_key_in_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SecretStr keeps the key out of logs, reprs and tracebacks."""
+    monkeypatch.setenv("GOOGLE_API_KEY", "super-secret-key")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert "super-secret-key" not in repr(settings)
+    assert "super-secret-key" not in str(settings.model_dump())
+    assert settings.google_api_key is not None
+    assert settings.google_api_key.get_secret_value() == "super-secret-key"
+
+
+def test_missing_api_key_is_valid_so_offline_runs_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No key is a supported mode: demos and tests use the offline path."""
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert not settings.has_api_key
+    monkeypatch.setenv("GOOGLE_API_KEY", "")
+    assert not Settings(_env_file=None).has_api_key  # type: ignore[call-arg]
+
+
+# --------------------------------------------------------------------------- #
+# Field kinds and logging plumbing
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("field_id", "expected_kind"),
+    [
+        ("currency", ValueKind.CURRENCY),
+        ("term", ValueKind.TERM),
+        ("amount", ValueKind.AMOUNT),
+        ("nominal_rate", ValueKind.PERCENT),
+        ("effective_rate", ValueKind.PERCENT),
+        ("collateral", ValueKind.TEXT),
+        ("application_fee", ValueKind.FEE),
+        ("disbursement_fee", ValueKind.FEE),
+        ("service_fee", ValueKind.FEE),
+        ("salary_privileges", ValueKind.TEXT),
+    ],
+)
+def test_each_field_has_the_kind_its_normalizer_expects(
+    field_id: str, expected_kind: ValueKind
+) -> None:
+    """Kind drives normalization and diff magnitude, so a wrong kind is a real bug."""
+    assert get_field(field_id).kind is expected_kind
+
+
+def test_configure_logging_is_idempotent() -> None:
+    """Calling it twice must not duplicate every log line."""
+    import logging
+
+    configure_logging("INFO")
+    configure_logging("DEBUG")
+    root = logging.getLogger()
+    assert len(root.handlers) == 1
+    assert root.level == logging.DEBUG
+
+
+def test_armenian_text_survives_json_logging() -> None:
+    """Logs must stay readable in Armenian, not \\u0531-escaped."""
+    import logging
+
+    record = logging.LogRecord(
+        name="tariff_agent.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="field_extracted",
+        args=None,
+        exc_info=None,
+    )
+    record.value = "Անվանական տոկոսադրույք՝ 13,5%"
+    line = JsonFormatter().format(record)
+    assert "Անվանական" in line
+    assert json.loads(line)["value"] == "Անվանական տոկոսադրույք՝ 13,5%"
+
+
+# --------------------------------------------------------------------------- #
+# TODO(levon): write this one yourself - it is the likely live-review question.
+#
+# Build a snapshot payload with _stored_payload(), delete one field from
+# payload["fields"] (service_fee is a good choice - it simulates a snapshot
+# written before that field was added to the registry), load it with
+# TariffExtraction.from_stored(), and assert that:
+#   * the field is present again,
+#   * its value is the NOT_FOUND sentinel,
+#   * its status is FieldStatus.NOT_FOUND,
+#   * the other fields are untouched.
+# --------------------------------------------------------------------------- #
