@@ -31,6 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, Protocol, Self
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -90,8 +91,12 @@ class FetchResult:
         sha256: Hash of ``content``. Phase 5 uses it to skip re-indexing a
             document whose bytes have not changed.
         size: Length of ``content`` in bytes.
-        retrieved_at: When the request completed (UTC), or when the cached copy
-            was originally stored for a 304.
+        retrieved_at: When these bytes were downloaded (UTC). Unchanged by a
+            304, because the document itself did not change then.
+        checked_at: When the bank was last asked about this document (UTC).
+            After a 304 this moves and ``retrieved_at`` does not, which is the
+            difference between "last changed" and "last verified" - a report
+            saying a tariff is current needs the second, not the first.
         from_cache: True when the server answered 304 and cached bytes were
             reused, or when running offline.
     """
@@ -103,6 +108,7 @@ class FetchResult:
     sha256: str
     size: int
     retrieved_at: datetime
+    checked_at: datetime
     from_cache: bool
 
 
@@ -153,6 +159,7 @@ class SafeHttpClient:
         self._settings = settings
         self._sleep = sleep
         self._robots = robots
+        self._next_allowed: dict[str, float] = {}
         self._client = httpx.Client(
             timeout=httpx.Timeout(
                 connect=settings.connect_timeout,
@@ -414,6 +421,7 @@ class SafeHttpClient:
             FetchError: On a redirect without a ``Location``.
         """
         headers = self._conditional_headers(cached)
+        self._pace(url)
         with self._client.stream("GET", url, headers=headers) as response:
             if response.status_code == 304 and cached is not None:
                 logger.info("document_unchanged", extra={"url": url, "status": 304})
@@ -434,6 +442,7 @@ class SafeHttpClient:
             content = self._read_capped(response, url)
 
         _check_content_kind(content, declared, expect, url)
+        now = datetime.now(UTC)
         result = FetchResult(
             url=url,
             requested_url=requested_url,
@@ -441,11 +450,35 @@ class SafeHttpClient:
             content_type=declared,
             sha256=hashlib.sha256(content).hexdigest(),
             size=len(content),
-            retrieved_at=datetime.now(UTC),
+            retrieved_at=now,
+            checked_at=now,
             from_cache=False,
         )
         self._write_cache(requested_url, result, response.headers)
         return result
+
+    def _pace(self, url: str) -> None:
+        """Wait, if needed, before hitting the same host again.
+
+        Tracked per host rather than globally: politeness is owed to a server,
+        not to the network. Uses the injected sleep, so tests observe the pause
+        without serving it.
+
+        Args:
+            url: The URL about to be requested.
+        """
+        interval = self._settings.min_request_interval_s
+        if interval <= 0:
+            return
+        host = urlsplit(url).hostname or ""
+        now = time.monotonic()
+        wait = self._next_allowed.get(host, 0.0) - now
+        if wait > 0:
+            logger.debug("request_paced", extra={"host": host, "wait_s": round(wait, 2)})
+            self._sleep(wait)
+        else:
+            wait = 0.0
+        self._next_allowed[host] = now + wait + interval
 
     def _conditional_headers(self, cached: _CacheEntry | None) -> dict[str, str]:
         """Build revalidation headers from a cached copy.
@@ -608,6 +641,7 @@ class SafeHttpClient:
             "sha256": result.sha256,
             "size": result.size,
             "retrieved_at": result.retrieved_at.isoformat(),
+            "checked_at": result.checked_at.isoformat(),
             "etag": headers.get("etag"),
             "last_modified": headers.get("last-modified"),
         }
@@ -645,6 +679,9 @@ class SafeHttpClient:
             retrieved_at = datetime.fromisoformat(str(retrieved_raw))
         except (TypeError, ValueError):
             retrieved_at = datetime.now(UTC)
+        checked_at = datetime.now(UTC)
+        if from_cache and not self._settings.offline:
+            self._touch_cache_checked_at(requested_url, cached, checked_at)
         return FetchResult(
             url=url or str(meta.get("final_url") or requested_url),
             requested_url=requested_url,
@@ -653,8 +690,32 @@ class SafeHttpClient:
             sha256=str(meta.get("sha256") or hashlib.sha256(cached.content).hexdigest()),
             size=len(cached.content),
             retrieved_at=retrieved_at,
+            checked_at=checked_at,
             from_cache=from_cache,
         )
+
+    def _touch_cache_checked_at(
+        self, requested_url: str, cached: _CacheEntry, checked_at: datetime
+    ) -> None:
+        """Record that the bank confirmed this document is unchanged.
+
+        Persisted so "last verified" survives between runs, which is what a
+        monitoring report needs to state honestly.
+
+        Args:
+            requested_url: The normalized URL originally requested.
+            cached: The cache entry whose metadata is updated.
+            checked_at: The moment of confirmation.
+        """
+        _, meta_path = self._cache_paths(requested_url)
+        meta = {**cached.meta, "checked_at": checked_at.isoformat()}
+        try:
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            logger.warning(
+                "cache_meta_update_failed",
+                extra={"url": requested_url, "error_type": type(exc).__name__},
+            )
 
 
 def _check_content_kind(

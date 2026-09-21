@@ -58,13 +58,16 @@ class Recorder:
 
 @pytest.fixture
 def settings(tmp_path: Path) -> HttpSettings:
-    """Fast, isolated settings: tiny backoff, no robots, cache in tmp_path."""
+    """Fast, isolated settings: tiny backoff, no robots, no pacing, tmp cache."""
     return HttpSettings(
         max_attempts=3,
         backoff_base=0.01,
         backoff_max=0.05,
         max_download_bytes=1024,
         respect_robots=False,
+        # Pacing shares the injected sleep with retries; the retry tests count
+        # sleeps, so politeness is switched off here and tested on its own.
+        min_request_interval_s=0.0,
         cache_dir=tmp_path / "cache",
     )
 
@@ -413,3 +416,75 @@ def test_validators_are_not_sent_to_a_different_resource(settings: HttpSettings)
     client.fetch(PDF_URL, expect=ContentKind.PDF)
     client.fetch(PDF_URL, expect=ContentKind.PDF)
     assert "if-none-match" not in rec.requests[-1].headers
+
+
+# --------------------------------------------------------------------------- #
+# Politeness and the last-checked timestamp
+# --------------------------------------------------------------------------- #
+
+
+def test_consecutive_requests_to_one_host_are_paced(tmp_path: Path) -> None:
+    """Requests would otherwise arrive back to back; a bank deserves better."""
+    settings = HttpSettings(
+        respect_robots=False, min_request_interval_s=1.0, cache_dir=tmp_path / "cache"
+    )
+    slept: list[float] = []
+    rec = Recorder(pdf_response())
+    client = build(rec, settings, slept)
+    client.fetch(PDF_URL, expect=ContentKind.PDF)
+    client.fetch("https://www.acba.am/files/other.pdf", expect=ContentKind.PDF)
+    assert len(slept) == 1, "the first request should not wait"
+    assert 0.9 <= slept[0] <= 1.0
+
+
+def test_pacing_is_per_host(tmp_path: Path) -> None:
+    """Politeness is owed to a server, not to the network as a whole."""
+    settings = HttpSettings(
+        respect_robots=False, min_request_interval_s=1.0, cache_dir=tmp_path / "cache"
+    )
+    slept: list[float] = []
+    rec = Recorder(pdf_response())
+    client = build(rec, settings, slept)
+    client.fetch(PDF_URL, expect=ContentKind.PDF)               # www.acba.am
+    client.fetch("https://acba.am/files/x.pdf", expect=ContentKind.PDF)  # acba.am
+    assert slept == []
+
+
+def test_304_updates_checked_at_but_not_retrieved_at(settings: HttpSettings) -> None:
+    """'Last verified' and 'last changed' are different facts.
+
+    A report saying a tariff is current needs the first; a change log needs the
+    second. A 304 moves only one of them.
+    """
+    rec = Recorder(pdf_response(headers={"etag": '"v1"'}), httpx.Response(304))
+    client = build(rec, settings)
+    first = client.fetch(PDF_URL, expect=ContentKind.PDF)
+    second = client.fetch(PDF_URL, expect=ContentKind.PDF)
+
+    assert second.from_cache is True
+    assert second.retrieved_at == first.retrieved_at
+    assert second.checked_at > first.checked_at
+
+
+def test_a_fresh_download_checked_and_retrieved_at_the_same_moment(
+    settings: HttpSettings,
+) -> None:
+    """When bytes actually arrive, the two timestamps coincide."""
+    rec = Recorder(pdf_response())
+    result = build(rec, settings).fetch(PDF_URL, expect=ContentKind.PDF)
+    assert result.retrieved_at == result.checked_at
+
+
+def test_last_checked_survives_between_runs(settings: HttpSettings) -> None:
+    """The confirmation is persisted, not just returned to the caller."""
+    import json as json_module
+
+    rec = Recorder(pdf_response(headers={"etag": '"v1"'}), httpx.Response(304))
+    client = build(rec, settings)
+    client.fetch(PDF_URL, expect=ContentKind.PDF)
+    client.fetch(PDF_URL, expect=ContentKind.PDF)
+
+    meta_files = list((settings.cache_dir).glob("*.json"))
+    assert meta_files
+    meta = json_module.loads(meta_files[0].read_text(encoding="utf-8"))
+    assert meta["checked_at"] > meta["retrieved_at"]

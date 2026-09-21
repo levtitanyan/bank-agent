@@ -49,6 +49,10 @@ class HttpSettings(BaseModel):
             re-checked against the allowlist.
         max_download_bytes: Hard cap on bytes read from one response, enforced
             while streaming rather than trusting ``Content-Length``.
+        min_request_interval_s: Minimum gap between two requests to the same
+            host. A monitoring run makes only a handful of requests, but they
+            would otherwise arrive back to back; this keeps the crawl polite
+            and is the floor a robots.txt Crawl-delay would raise.
         max_attempts: Total attempts per request, including the first one.
         backoff_base: First backoff delay in seconds; doubles per attempt.
         backoff_max: Ceiling for any single wait, including a server-supplied
@@ -67,6 +71,7 @@ class HttpSettings(BaseModel):
     read_timeout: float = Field(default=60.0, gt=0)
     max_redirects: int = Field(default=5, ge=0, le=20)
     max_download_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+    min_request_interval_s: float = Field(default=1.0, ge=0)
     max_attempts: int = Field(default=3, ge=1, le=10)
     backoff_base: float = Field(default=0.5, gt=0)
     backoff_max: float = Field(default=8.0, gt=0)
