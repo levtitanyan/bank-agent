@@ -58,7 +58,8 @@ human-in-the-loop review · two controlled failures (404 and timeout).
 
 | Document | Contents |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | End-to-end flow, module map, what Gemini decides vs what code decides, design decisions, test strategy |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | End-to-end flow, module map, what Gemini decides vs what code decides, test strategy |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Every design decision by phase: options considered, why this one, which requirement it serves |
 
 ## Ground rules this project follows
 
