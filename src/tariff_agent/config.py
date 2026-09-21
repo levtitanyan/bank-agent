@@ -193,12 +193,16 @@ class ProductCatalog(BaseModel):
     Attributes:
         bank: Bank name, copied into every extraction and snapshot.
         products: The monitored products, in configuration order.
+        unsupported_terms: Words that mark a query as being about a product we
+            do not monitor. Fuzzy matching alone would resolve "business
+            mortgage" to the retail mortgage, because the phrase contains it.
     """
 
     model_config = ConfigDict(frozen=True)
 
     bank: str
     products: tuple[Product, ...] = Field(min_length=1)
+    unsupported_terms: tuple[str, ...] = ()
 
     def get(self, product_id: str) -> Product | None:
         """Look up a product by id.
@@ -215,6 +219,96 @@ class ProductCatalog(BaseModel):
     def product_ids(self) -> tuple[str, ...]:
         """Ids of all configured products, in configuration order."""
         return tuple(p.id for p in self.products)
+
+
+class ScoringKeyword(BaseModel):
+    """One weighted keyword used when ranking discovered sources.
+
+    Attributes:
+        text: The keyword, matched case-insensitively after NFC normalization.
+        weight: Added to a candidate's score; negative values push it down.
+        role: Whether a match suggests the authoritative product document
+            ("primary") or a useful secondary source ("supporting").
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    weight: float
+    role: str = "supporting"
+
+
+class DiscoveryScoring(BaseModel):
+    """Weights that decide which discovered source is authoritative.
+
+    Attributes:
+        anchor_keywords: Matched against a link's anchor text.
+        url_keywords: Matched against the URL, for links whose anchor text is
+            unhelpful - real pages link PDFs with anchors like «ԱՅՍՏԵՂ».
+        negative_keywords: Subtracted wherever they appear. Archived editions
+            and business products are the two ways a plausible-looking document
+            can be the wrong one.
+        path_segments: Structural signal from the URL path, e.g. ``/business/``.
+        product_slug_match: Added when the URL slug matches the product name.
+        seed_page_bonus: Added when the page is a curated seed. Small, so it
+            breaks ties between sibling pages without overriding live signals.
+        pdf_bonus: Added for PDFs, which are usually more authoritative.
+        rate_mention_bonus: Added for an HTML page that actually states rates.
+        min_score: Candidates below this are dropped, not merely ranked last.
+        page_min_score: Floor for deciding which pages are worth fetching at
+            all. Higher than ``min_score`` because a page that only loosely
+            matches costs a network round-trip to find that out.
+        shared_document_keywords: Documents covering several products, which are
+            therefore not required to match the product slug.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    anchor_keywords: tuple[ScoringKeyword, ...] = ()
+    url_keywords: tuple[ScoringKeyword, ...] = ()
+    negative_keywords: tuple[ScoringKeyword, ...] = ()
+    path_segments: dict[str, float] = Field(default_factory=dict)
+    product_slug_match: float = 20.0
+    seed_page_bonus: float = 8.0
+    pdf_bonus: float = 10.0
+    rate_mention_bonus: float = 15.0
+    min_score: float = 15.0
+    page_min_score: float = 60.0
+    shared_document_keywords: tuple[str, ...] = ()
+
+
+class DiscoveryLimits(BaseModel):
+    """Bounds on how much crawling one discovery run may do.
+
+    Attributes:
+        max_pages: Pages fetched per run.
+        max_links_per_page: Links examined on one page.
+        max_candidates: Candidates kept after ranking.
+        max_supporting: Supporting sources reported alongside the primary one.
+        ambiguity_band: Two primary candidates this close require human review.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    max_pages: int = Field(default=6, ge=1, le=50)
+    max_links_per_page: int = Field(default=400, ge=1)
+    max_candidates: int = Field(default=8, ge=1)
+    max_supporting: int = Field(default=4, ge=0)
+    ambiguity_band: float = Field(default=10.0, ge=0)
+
+
+class DiscoveryConfig(BaseModel):
+    """Everything discovery needs in order to rank sources.
+
+    Attributes:
+        scoring: The weights.
+        limits: The crawl bounds.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    scoring: DiscoveryScoring = Field(default_factory=DiscoveryScoring)
+    limits: DiscoveryLimits = Field(default_factory=DiscoveryLimits)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -280,6 +374,25 @@ def load_products(path: Path | None = None) -> ProductCatalog:
     if len(set(ids)) != len(ids):
         raise ConfigError(f"duplicate product ids in {path}: {ids}")
     return catalog
+
+
+def load_discovery_config(path: Path | None = None) -> DiscoveryConfig:
+    """Load the discovery scoring configuration.
+
+    Args:
+        path: Override for the YAML location; defaults to ``config/discovery.yaml``.
+
+    Returns:
+        The parsed :class:`DiscoveryConfig`.
+
+    Raises:
+        ConfigError: If the file is missing or does not match the schema.
+    """
+    path = path or CONFIG_DIR / "discovery.yaml"
+    try:
+        return DiscoveryConfig.model_validate(_read_yaml(path))
+    except ValidationError as exc:
+        raise ConfigError(f"invalid discovery configuration in {path}: {exc}") from exc
 
 
 @lru_cache(maxsize=1)

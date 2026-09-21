@@ -1,0 +1,72 @@
+# How candidate sources are scored during discovery.
+#
+# Kept in YAML rather than in Python because these are policy, not logic: the
+# Armenian keywords below are exactly what a bank-side reviewer should be able
+# to read and correct. Weights are additive; a candidate scoring below
+# `min_score` is dropped rather than merely ranked last.
+scoring:
+  # Matched against a link's anchor text (NFC-normalized, case-folded).
+  # The information summary («տեղեկատվական ամփոփագիր») is the authoritative
+  # product document, so it outranks the general tariff list.
+  anchor_keywords:
+    - {text: "տեղեկատվական ամփոփագիր", weight: 50, role: primary}
+    - {text: "ամփոփագիր", weight: 40, role: primary}
+    - {text: "ամփոփաթերթիկ", weight: 40, role: primary}
+    - {text: "information summary", weight: 40, role: primary}
+    - {text: "վարկային սակագներ", weight: 28, role: supporting}
+    - {text: "սակագներ", weight: 25, role: supporting}
+    - {text: "սակագին", weight: 25, role: supporting}
+    - {text: "տարիֆ", weight: 20, role: supporting}
+    - {text: "պայմաններ", weight: 10, role: supporting}
+    - {text: "տոկոսադրույք", weight: 10, role: supporting}
+
+  # Matched against the URL itself, for links whose anchor text is unhelpful
+  # (real pages link PDFs with anchors like «ԱՅՍՏԵՂ» - "HERE").
+  url_keywords:
+    - {text: "loan info", weight: 30, role: primary}
+    - {text: "loan%20info", weight: 30, role: primary}
+    - {text: "loans-tariffs", weight: 25, role: supporting}
+    - {text: "tariffs", weight: 15, role: supporting}
+
+  # Subtracted wherever they appear (anchor, URL or page title).
+  # Archived editions and business products are the two ways a plausible-looking
+  # document can be the wrong one.
+  negative_keywords:
+    - {text: "tariffs-archive", weight: -60}
+    - {text: "արխիվ", weight: -50}
+    - {text: "archive", weight: -50}
+    - {text: "բիզնես", weight: -35}
+    - {text: "business", weight: -35}
+    - {text: "calculator", weight: -30}
+    - {text: "հաշվիչ", weight: -30}
+
+  # Structural signal from the URL path. ACBA separates its audiences, so this
+  # is a stronger discriminator than keywords: business-mortgage lives under
+  # /hy/business/ and is not the retail mortgage we monitor.
+  path_segments:
+    "/individual/": 20
+    "/business/": -60
+    "/agro/": -60
+    "/news/": -40
+    "/announcements/": -25
+    "/calculators/": -40
+
+  product_slug_match: 20      # URL slug fuzzily matches the product name
+  seed_page_bonus: 8          # page is a curated seed in products.yaml
+  pdf_bonus: 10               # a PDF is usually more authoritative than a page
+  rate_mention_bonus: 15      # an HTML page that actually states տոկոսադրույք
+  min_score: 15               # floor: below this, a candidate is dropped
+  page_min_score: 60          # floor for deciding which pages are worth fetching
+
+  # Documents that legitimately cover several products, so they are NOT required
+  # to match the product slug (loans-tariffs.pdf serves every loan product).
+  shared_document_keywords:
+    - "loans-tariffs"
+    - "սակագներ"
+
+limits:
+  max_pages: 6                # pages fetched per discovery run
+  max_links_per_page: 400
+  max_candidates: 8
+  max_supporting: 4
+  ambiguity_band: 10          # two primaries this close -> human review

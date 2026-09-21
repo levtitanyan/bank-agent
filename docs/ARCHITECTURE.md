@@ -158,6 +158,49 @@ lost on every hop and the 1 MB tariff PDF was re-downloaded on every run.
 means no rules exist and fetching proceeds; a 5xx or timeout means permission is unknown and
 the run stops.
 
+### `discovery/` — deciding what to download *(Phase 3)*
+
+**`product_matcher.py`** — `resolve_product(query, catalog)` is hybrid and fully
+deterministic: a curated multilingual synonym dictionary in `config/products.yaml` carries
+the *semantics* (no string metric discovers that «հիփոթեք», "mortgage" and "ипотека" are one
+product), rapidfuzz `token_set_ratio` absorbs the *typos, word order and extra words*, and an
+`unsupported_terms` penalty handles the case similarity gets flat wrong — "business mortgage"
+literally contains "mortgage" and scores 100 against it. Bands: ≥85 with a ≥10 lead resolves;
+60–85 or a close race is `AMBIGUOUS` and goes to a human; below 60 is `NOT_FOUND`. It returns
+a status object rather than raising, because the ambiguous case carries the data a reviewer
+needs and Phase 8 tools must hand the model a status, never an exception.
+
+**`sitemap.py`** — parsed with `defusedxml`, not lxml: stock XML parsers expand entities, and
+a "billion laughs" document is a few hundred bytes on the wire and gigabytes in memory. Every
+failure degrades to `[]`, because the sitemap is one route of three. ACBA's real sitemap
+contains a malformed `<loc>`; one bad entry must not discard the other 587.
+
+**`sources.py`** — `discover_product_sources()` returns a **primary source plus supporting
+ones**, not a single winner. Two properties of the real site forced that shape:
+
+* *The authoritative source is not always a PDF.* The consumer-loan page links no
+  «ամփոփագիր» at all and states its rates inline, while the mortgage page links a proper
+  information summary among nine PDFs. A "PDF beats HTML" rule reports the wrong document.
+* *Some documents are shared.* `loans-tariffs.pdf` covers every loan product, so it is exempt
+  from the product-slug requirement — and, being product-agnostic, it can never be primary.
+
+Ranking is additive and **explainable**: every candidate carries the reasons behind its score
+(`anchor mentions 'տեղեկատվական ամփոփագիր' (+50)`), which are logged and shown to a reviewer.
+Weights live in `config/discovery.yaml` — Armenian keywords are exactly what a bank-side
+reviewer should be able to correct. Negative weights matter as much as positive ones: an
+archived tariff PDF and a business-product page are the two ways a plausible-looking document
+is the wrong one, and `/business/` vs `/individual/` in the path is a stronger discriminator
+than any keyword. Candidates below `min_score` are dropped, not merely ranked last.
+
+Selection order is **role first, then score**: only a candidate carrying a primary signal (an
+information summary, or a page that states rates itself) may lead. Supporting sources are then
+ranked by score alone, so the shared tariff PDF is not buried beneath sibling pages.
+
+When two *information summaries* score within 10 points — ACBA publishes separate ones for
+purchase and renovation mortgages — `requires_review` is set with both candidates. That is the
+assignment's "two plausible official PDFs" HITL case, produced by the real site rather than
+staged.
+
 ### `config.py` — split by who needs to audit it
 
 - **Secrets → environment.** `Settings` (pydantic-settings) reads `.env`. App variables use
@@ -221,6 +264,14 @@ logged** — decisions and their inputs and outputs only.
 | D19 | `sleep` and `transport` injected | Patch `time.sleep` in tests | Explicit seams keep the retry tests instant and honest |
 | D20 | 403 never retried | Retry all failures | An access decision is respected, not hammered |
 | D21 | mypy strict on `src` only | Strict everywhere | Tests pass plain strings where pydantic coerces them — that is the behaviour under test, not a type error |
+| D22 | Deterministic product resolution | Ask Gemini which product was meant | A wrong resolution silently reports another product's tariffs; this decision must be reproducible offline and explainable in one log line |
+| D23 | Synonym dictionary + fuzzy + penalty | Fuzzy matching alone | "business mortgage" contains "mortgage" and scores 100 — similarity alone cannot represent "we do not monitor that" |
+| D24 | Resolution returns a status, never raises | Raise `ProductNotFoundError` | The ambiguous case is data for a reviewer, and agent tools must not raise into the model |
+| D25 | Primary + supporting sources | A single best source | The consumer-loan page holds its own rates while the shared tariff PDF outscores it; both are needed |
+| D26 | Role before score when choosing the primary | Rank by score alone | A document covering every loan product is never one product's authoritative source, however well it scores |
+| D27 | Scoring weights in YAML | Constants in Python | The Armenian keywords are policy a bank-side reviewer should be able to read and correct |
+| D28 | `defusedxml` for the sitemap | `lxml` / stdlib ElementTree | Entity expansion turns a few hundred bytes into gigabytes of memory |
+| D29 | Two close summaries → review | Pick the higher score | Purchase vs renovation mortgage is a coin flip on which product's rates get reported |
 
 ## 5. Test strategy
 
@@ -238,6 +289,8 @@ a report) and lighter on plumbing:
 | URL policy | 19 | lookalike hosts, plain http, ports, relative resolution, percent-encoding |
 | HTTP client | 25 | 404/403 not retried, 5xx retried then succeeds, capped `Retry-After`, oversize aborted, mislabelled content rejected, off-domain redirect refused, 304 revalidation, offline mode |
 | robots.txt | 5 | disallowed path refused, 404 allows, 5xx stops the run, fetched once per host |
+| Product matching | 31 | hy/en/ru + transliterations, typos, «loan» ambiguity, business products refused, nonsense refused, NFC equivalence, determinism |
+| Discovery | 26 | sitemap traps and XML bombs, page-selection floors, keyword and path scoring, primary/supporting split, HITL on rival summaries, crawl budget, seed fallback, broken page mid-crawl |
 
 *(Phase 9)* adds an evaluation dataset measuring product-resolution accuracy, retrieval hit
 rate, field match, NOT_FOUND precision and evidence-verification rate.
@@ -249,8 +302,8 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 | 1 | Skeleton, config, field registry, models, errors, logging | ✅ |
 | 1.5 | Schema versioning, status rework, deterministic confidence, docs | ✅ |
 | 2 | Safe HTTP client: allowlist per redirect hop, size/MIME caps, bounded retries | ✅ |
-| 3 | Product resolution + official source discovery | next |
-| 4 | PDF/HTML processing, cleaning, OCR fallback | |
+| 3 | Product resolution + official source discovery | ✅ |
+| 4 | PDF/HTML processing, cleaning, OCR fallback | next |
 | 5 | Chunking + hybrid BM25/embedding RAG | |
 | 6 | Gemini structured extraction + deterministic validation | |
 | 7 | Snapshots, normalized diffing, human-in-the-loop | |

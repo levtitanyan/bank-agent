@@ -167,6 +167,15 @@ class SafeHttpClient:
 
     # ----------------------------------------------------------------- public
 
+    @property
+    def allowlist(self) -> Allowlist:
+        """The policy this client enforces.
+
+        Exposed so link filtering during discovery uses the same allowlist the
+        client checks against, rather than a second copy that could drift.
+        """
+        return self._allowlist
+
     def attach_robots(self, policy: RobotsChecker) -> None:
         """Install the robots.txt policy consulted before each fetch.
 

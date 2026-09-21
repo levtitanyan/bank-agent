@@ -7,6 +7,23 @@
 # freshly discovered.
 bank: ACBA Bank
 
+# Terms that mean "not one of the products we monitor". A query containing one
+# is penalized during resolution, because fuzzy matching alone would happily
+# resolve "business mortgage" to our retail mortgage: the phrase contains it.
+# ACBA really does sell all of these - we simply do not monitor them here.
+unsupported_terms:
+  - business
+  - բիզնես
+  - бизнес
+  - agro
+  - ագրո
+  - card
+  - քարտ
+  - карт
+  - deposit
+  - ավանդ
+  - вклад
+
 products:
   - id: consumer_loan
     kind: loan
@@ -18,6 +35,7 @@ products:
         - սպառողական
         - անձնական վարկ
         - վարկ սպառողական նպատակներով
+        - sparoxakan vark
       en:
         - consumer loan
         - personal loan
@@ -27,6 +45,9 @@ products:
         - потребительский кредит
         - потребкредит
         - кредит наличными
+        # Latin transliterations: people type these when the keyboard is English.
+        - potrebitelskiy kredit
+        - potrebkredit
     seed_pages:
       - https://acba.am/hy/individual/loans/consumer-loans
       - https://acba.am/hy/individual/loan/5G-loan
@@ -43,6 +64,7 @@ products:
         - հիփոթեք
         - բնակարանային վարկ
         - բնակարան ձեռք բերելու վարկ
+        - hipotekayin vark
       en:
         - mortgage
         - mortgage loan
@@ -53,6 +75,9 @@ products:
         - ипотека
         - ипотечный кредит
         - жилищный кредит
+        # Latin transliterations: people type these when the keyboard is English.
+        - ipoteka
+        - ipotechny kredit
     seed_pages:
       - https://acba.am/hy/individual/loan/purchase-mortgage
     seed_documents:

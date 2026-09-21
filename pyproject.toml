@@ -17,6 +17,7 @@ dependencies = [
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
+    "defusedxml>=0.7",
     # Documents / OCR
     "pymupdf>=1.24",
     "pytesseract>=0.3.10",
@@ -67,6 +68,10 @@ python_version = "3.11"
 strict = true
 mypy_path = "src"
 files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "defusedxml.*"
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"
