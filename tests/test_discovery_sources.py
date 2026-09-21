@@ -19,7 +19,11 @@ from tariff_agent.config import (
     load_discovery_config,
     load_products,
 )
-from tariff_agent.discovery.sitemap import parse_sitemap_urls
+from tariff_agent.discovery.sitemap import (
+    fetch_sitemap_urls,
+    parse_sitemap,
+    parse_sitemap_urls,
+)
 from tariff_agent.discovery.sources import (
     SourceKind,
     SourceRole,
@@ -395,3 +399,102 @@ def test_scoring_config_is_policy_a_reviewer_can_change() -> None:
     client, _ = serve_fixtures({MORTGAGE_PAGE: "purchase_mortgage_page.html"})
     result = discover_product_sources(client, MORTGAGE, strict, [MORTGAGE_PAGE])
     assert result.primary.is_seed  # everything live was dropped, seeds remain
+
+
+# --------------------------------------------------------------------------- #
+# Sitemap index following
+# --------------------------------------------------------------------------- #
+
+INDEX_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://acba.am/sitemap-pages.xml</loc></sitemap>
+  <sitemap><loc>https://acba.am/sitemap-broken.xml</loc></sitemap>
+</sitemapindex>"""
+
+CHILD_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://acba.am/hy/individual/loan/purchase-mortgage</loc></url>
+  <url><loc>https://acba.am/hy/individual/loans/consumer-loans</loc></url>
+</urlset>"""
+
+NESTED_INDEX_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://acba.am/sitemap-deeper.xml</loc></sitemap>
+</sitemapindex>"""
+
+
+def sitemap_client(pages: dict[str, bytes]) -> tuple[SafeHttpClient, list[str]]:
+    """Serve sitemap XML by URL and record what was fetched."""
+    fetched: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        fetched.append(url)
+        body = pages.get(url)
+        if body is None:
+            return httpx.Response(404)
+        return httpx.Response(200, content=body, headers={"content-type": "application/xml"})
+
+    settings = HttpSettings(respect_robots=False, max_attempts=1, cache_dir=Path("/tmp/no-cache"))
+    client = SafeHttpClient(
+        ALLOWLIST, settings, transport=httpx.MockTransport(handler), sleep=lambda _: None
+    )
+    return client, fetched
+
+
+def test_parse_does_not_mistake_an_index_for_a_list_of_pages() -> None:
+    """An index lists sitemaps; returning them as pages would crawl XML files."""
+    assert parse_sitemap_urls(INDEX_XML, ALLOWLIST) == []
+    assert parse_sitemap(INDEX_XML, ALLOWLIST).is_index is True
+    assert parse_sitemap(CHILD_XML, ALLOWLIST).is_index is False
+
+
+def test_an_index_is_followed_one_level_to_its_pages() -> None:
+    """The page URLs come from the children, not from the index itself."""
+    client, fetched = sitemap_client(
+        {
+            "https://acba.am/sitemap.xml": INDEX_XML,
+            "https://acba.am/sitemap-pages.xml": CHILD_XML,
+        }
+    )
+    urls = fetch_sitemap_urls(client, "https://acba.am/sitemap.xml", ALLOWLIST)
+    assert MORTGAGE_PAGE in urls
+    assert not any(url.endswith(".xml") for url in urls)
+    assert "https://acba.am/sitemap-pages.xml" in fetched
+
+
+def test_one_unreadable_child_sitemap_does_not_lose_the_others() -> None:
+    """A 404 on one child is a lost route, not a failed discovery."""
+    client, _ = sitemap_client(
+        {
+            "https://acba.am/sitemap.xml": INDEX_XML,
+            "https://acba.am/sitemap-pages.xml": CHILD_XML,
+            # sitemap-broken.xml is absent and answers 404
+        }
+    )
+    urls = fetch_sitemap_urls(client, "https://acba.am/sitemap.xml", ALLOWLIST)
+    assert MORTGAGE_PAGE in urls
+
+
+def test_index_recursion_stops_at_one_level() -> None:
+    """An index inside an index is a mistake or a trap; either way, stop."""
+    client, fetched = sitemap_client(
+        {
+            "https://acba.am/sitemap.xml": INDEX_XML,
+            "https://acba.am/sitemap-pages.xml": NESTED_INDEX_XML,
+        }
+    )
+    assert fetch_sitemap_urls(client, "https://acba.am/sitemap.xml", ALLOWLIST) == []
+    assert "https://acba.am/sitemap-deeper.xml" not in fetched
+
+
+def test_the_number_of_child_sitemaps_is_capped() -> None:
+    """A hostile index must not be able to order an unbounded crawl."""
+    many = b"""<?xml version="1.0" encoding="utf-8"?>
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">""" + b"".join(
+        f"<sitemap><loc>https://acba.am/sitemap-{i}.xml</loc></sitemap>".encode()
+        for i in range(50)
+    ) + b"</sitemapindex>"
+    client, fetched = sitemap_client({"https://acba.am/sitemap.xml": many})
+    fetch_sitemap_urls(client, "https://acba.am/sitemap.xml", ALLOWLIST, max_children=3)
+    assert len([url for url in fetched if url.startswith("https://acba.am/sitemap-")]) == 3
