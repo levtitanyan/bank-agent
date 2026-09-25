@@ -1046,19 +1046,57 @@ Scored against values read off the live pages by hand; fields not personally ver
 excluded rather than guessed at. Both models were correct on every checked field, and every
 value either model reported carried evidence that verified.
 
-What separates them is *scope*, which a score does not show:
+**The scores are identical. What separates the models is scope — and that is the more
+important result.**
 
-* **currency, consumer loan.** 3.5-lite answered «ՀՀ դրամ» — the product page's own statement.
-  3.1-lite answered «ՀՀ դրամ, ԱՄՆ դոլար, եվրո, ՌԴ ռուբլի», which is true of the tariff book as
-  a whole and not of this product.
-* **nominal rate.** 3.5-lite gave «20.1-21.6%», the branch rate; 3.1-lite gave «13.9-21.6%»,
-  spanning the salary-customer offer to the branch maximum — which is closer to what the prompt
-  asks for, a full stated range.
+Asked for the consumer loan's currency, `gemini-3.5-flash-lite` answered «ՀՀ դրամ», which is
+what the product page states. `gemini-3.1-flash-lite` answered **«ՀՀ դրամ, ԱՄՆ դոլար, եվրո, ՌԴ
+ռուբլի»** — four currencies, every one of them real, none of them this product's. Those
+currencies belong to the tariff **book**, which covers every loan ACBA sells and was retrieved
+as a *supporting* source.
 
-Neither is simply better. The measurable conclusion is that both are accurate enough that the
-*guard rails* — quote verification, the relevance gate, deterministic validation — do more for
-correctness here than the choice between them. `gemini-2.5-flash` could not be measured today:
-reporting a quota error as a quality result would be worse than saying so.
+That is the failure this architecture exists to prevent, caught in the wild: a shared document's
+scope leaking into one product's answer. It is also the reason for several decisions that would
+otherwise look like over-engineering — primary and supporting sources kept apart (P5-D10),
+shared documents never allowed to lead (P3-D11), evidence tied to the passage that justified it
+(P6-D2). A substring-scored evaluation marks that answer **correct**, because «դրամ» is in it.
+Only the architecture distinguishes "true of the bank" from "true of this loan".
+
+The nominal rate shows the same thing more mildly: 3.5-lite gave «20.1-21.6%», the branch rate;
+3.1-lite gave «13.9-21.6%», spanning the salary-customer offer to the branch maximum — closer
+to the full stated range the prompt asks for.
+
+Neither model is simply better, and that is the measurable conclusion: both are accurate enough
+that the **guard rails do more for correctness than the choice between them**.
+`gemini-2.5-flash` could not be measured today — reporting a quota error as a quality result
+would be worse than saying so, and this gap will not be filled with an estimate.
+
+### P6-D15 · Every NOT_FOUND was checked against the documents
+**Requirement:** 5.6 · 5.11
+
+"14 of 20 fields found" invites the obvious question, so each of the six was traced back to the
+sources. Marker counts are occurrences of the field's identifying term in each document.
+
+| product · field | markers (primary / supporting) | verdict |
+|---|---|---|
+| consumer · `application_fee` | 0 / 0 | **Correctly absent.** Neither document mentions an application-review fee |
+| mortgage · `disbursement_fee` | 0 / 0 | **Correctly absent** by its identifying terms |
+| consumer · `service_fee` | 1 / 19 | **Our miss.** The tariff book states it for this product |
+| mortgage · `application_fee` | 1 / 1 | **Our miss.** Retrieved, not extracted |
+| mortgage · `service_fee` | 3 / 3 | **Our miss.** Retrieved, not extracted |
+| mortgage · `salary_privileges` | 2 / 2 | **Our miss.** Retrieved, not extracted |
+
+So two of the six are the bank's silence and four are ours — and the four share one cause. Each
+sits in a passage stating that a fee is **not charged**: «վարկային հաշվի բացման, վարման ն
+սպասարկման նպատակով հաճախորդից միջնորդավճար չի գանձվում», which OCR further mangles to «sh
+գանձվում». The model reads "no fee is charged" as *nothing was said*, when it is in fact a
+stated value of zero — the difference between «the bank charges nothing» and «we do not know
+what the bank charges», which is exactly the distinction this system is built to keep.
+
+The fix is a prompt instruction, not a looser gate: a statement that no fee applies is a value
+and must be reported as written. That change bumps the prompt version and invalidates cached
+answers, which is why it is recorded here rather than slipped in — and it is worth measuring
+afterwards rather than assuming.
 
 
 # Tooling decisions
