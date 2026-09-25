@@ -18,7 +18,7 @@ from tariff_agent.documents.cleaning import (
     prepare_for_scoring,
     strip_repeated_furniture,
 )
-from tariff_agent.documents.dates import parse_document_date
+from tariff_agent.documents.dates import parse_document_date, parse_document_edition
 from tariff_agent.documents.document import (
     Document,
     DocumentKind,
@@ -261,6 +261,7 @@ def _assemble(
     # scanning the whole document invites a misparse from an unrelated number.
     header = "\n".join(page.text for page in pages[:2])
     document_date = parse_document_date(header)
+    document_edition = parse_document_edition(header)
 
     total = sum(len(page.text) for page in pages)
     if total:
@@ -285,6 +286,7 @@ def _assemble(
         checked_at=fetch.checked_at,
         pages=tuple(pages),
         document_date=document_date,
+        document_edition=document_edition,
         sections=tuple(sections),
         quality=round(quality, 4),
         needs_review=needs_review,

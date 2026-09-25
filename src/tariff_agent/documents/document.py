@@ -138,6 +138,10 @@ class Document:
             առ՝ 15.05.2023թ.» - or None. Retrieval time says when *we* fetched
             it; this says how old the bank's own content is, which is what
             settles a disagreement between two official sources.
+        document_edition: The edition the document states for itself, such as
+            the «Խմբագրություն 132» on ACBA's tariff book. A new edition and a
+            changed value are different events, and a diff that cannot tell
+            them apart reports the wrong one.
         pages: The pages, in order.
         sections: Detected headings and their spans.
         quality: Worst page quality, weighted by page length.
@@ -155,6 +159,7 @@ class Document:
     checked_at: datetime
     pages: tuple[Page, ...]
     document_date: date | None = None
+    document_edition: str | None = None
     sections: tuple[Section, ...] = ()
     quality: float = 0.0
     needs_review: bool = False

@@ -27,7 +27,7 @@ This module holds no business logic: no parsing, no normalization, no I/O.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Final, Self
 
@@ -231,7 +231,13 @@ class TariffExtraction(BaseModel):
         product_id: Product registry id, e.g. ``"consumer_loan"``.
         document_name: Primary document the values were extracted from.
         source_url: URL of that document.
-        retrieved_at: When the document was fetched (UTC).
+        retrieved_at: When the primary document's bytes were downloaded (UTC).
+        checked_at: When the bank last confirmed the document current (UTC). A
+            business user reading a 2023 summary needs to see that we checked
+            today and the bank has not changed it since - "last verified" and
+            "last changed" are different facts (P2-D23).
+        document_date: The date the primary document states for itself.
+        document_edition: The edition it states for itself, when it does.
         extraction_method: What produced these values - ``"gemini:<model>"`` or
             ``"rule_based"`` for the offline extractor. Stamped on the report
             too, so a demo run can never be mistaken for a model extraction.
@@ -246,6 +252,9 @@ class TariffExtraction(BaseModel):
     document_name: str
     source_url: HttpUrl
     retrieved_at: datetime
+    checked_at: datetime | None = None
+    document_date: date | None = None
+    document_edition: str | None = None
     extraction_method: str = "unknown"
     fields: dict[str, FieldValue]
 

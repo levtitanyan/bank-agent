@@ -1,4 +1,4 @@
-"""Finding the date a document was issued or last updated.
+"""Finding when a document was issued, and which edition of it this is.
 
 A tariff document's age is part of its evidence. ACBA's mortgage information
 summary carries «Թարմացվել է առ՝ 15.05.2023թ.» while the product page describing
@@ -38,6 +38,28 @@ _ARMENIAN = re.compile(
 _MARKERS: Final[tuple[str, ...]] = (
     "թարմացվել", "ուժի մեջ", "հաստատման", "updated", "effective",
 )
+
+
+_EDITION = re.compile(r"(?:Խմբագրություն|խմբագրություն|Edition|edition)\s*[:\s]\s*(\d{1,4})")
+
+
+def parse_document_edition(text: str) -> str | None:
+    """Find the document's edition number, when it states one.
+
+    ACBA's tariff book carries «Խմբագրություն 132» in its header. The edition
+    and the date answer different questions in a diff: a new edition means the
+    bank republished the document, while a changed value means the tariff
+    itself moved. Both can happen without the other, and a monitoring report
+    that conflates them tells a reviewer the wrong story.
+
+    Args:
+        text: The document's text, or its first pages.
+
+    Returns:
+        The edition as written, or None.
+    """
+    match = _EDITION.search(text)
+    return match.group(1) if match else None
 
 
 def parse_document_date(text: str, *, window: int = 220) -> date | None:

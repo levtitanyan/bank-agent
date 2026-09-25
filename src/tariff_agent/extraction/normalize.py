@@ -37,8 +37,15 @@ _TERM_UNIT: Final = re.compile(
 _AMOUNT_VALUE: Final = re.compile(r"\d{1,3}(?:[ ,. ]\d{3})+|\d{4,}")
 _RANGE_SPLIT: Final = re.compile(r"\s*(?:-|–|—|to|մինչև)\s*")
 
+# «առանց վարկային հայտի ուսումնասիրության վճարի» - "without an application
+# review fee" - is how the mortgage summary states that a charge does not apply.
+# It says the same thing as «չի գանձվում» in the opposite grammatical direction,
+# and without it these values stayed unnormalized and therefore undiffable.
 _FREE: Final = re.compile(
-    r"անվճար|չի\s*գանձվում|չի\s*կիրառվում|առկա\s*չէ|չկա|free\b|not\s+applicable", re.IGNORECASE
+    r"անվճար|չի\s*գանձվում|չի\s*կիրառվում|առկա\s*չէ|չկա"
+    r"|առանց\s+[^։.\n]{0,60}?(?:վճար|միջնորդավճար)"
+    r"|free\b|not\s+applicable|no\s+fee",
+    re.IGNORECASE,
 )
 # «մինչն» is not a word: it is «մինչև» after Tesseract reads «և» as «ն». The
 # OCR'd form has to be recognised here, because missing it turned «up to 120

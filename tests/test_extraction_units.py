@@ -443,3 +443,27 @@ def test_a_term_inside_another_terms_range_is_not_a_conflict() -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "առանց վարկային հայտի ուսումնասիրության վճարի",
+        "առանց վարկի ամսական սպասարկման միջնորդավճարի",
+    ],
+)
+def test_a_charge_stated_as_absent_normalizes_to_zero(text: str) -> None:
+    """«առանց … վճարի» says the same as «չի գանձվում», the other way round.
+
+    Both are the bank stating it charges nothing. Until this was added the
+    values were extracted but not normalized, which left them undiffable - a
+    fee going from "none" to 0.5% would not have registered as a change.
+    """
+    assert normalize(text, ValueKind.FEE) == {"kind": "none", "value": 0.0, "unit": "free"}
+
+
+def test_a_product_named_without_collateral_is_not_a_free_fee() -> None:
+    """«առանց գրավի սպառողական վարկ» names an unsecured loan, not a zero fee."""
+    result = normalize("առանց գրավի սպառողական վարկ 20.1%", ValueKind.FEE)
+    assert result is not None
+    assert result["kind"] == "percent"
