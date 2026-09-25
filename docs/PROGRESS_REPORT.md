@@ -1,13 +1,14 @@
 # ACBA Tariff Monitoring Agent — progress report
 
-**Phases 1–4 of 9 complete:** contracts · guarded HTTP · discovery · document processing.
+**Phases 1–5 of 9 complete:** contracts · guarded HTTP · discovery · document processing ·
+retrieval.
 
 | | |
 |---|---|
-| Tests | **223 passing**, none touching the network |
+| Tests | **265 passing**, none touching the network |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
-| Code | 5,121 lines source (25 modules) · 2,588 lines tests · 17 commits |
-| Verified against | `acba.am`, live, at each phase boundary |
+| Code | ~7,000 lines source (35 modules) · ~3,600 lines tests · 19 commits |
+| Verified against | `acba.am`, live, at each phase boundary — including a measured retrieval comparison |
 
 This report states what works and how it decides. Section 7 states what does not work yet,
 including defects found by audit and bugs found by running the code against the real site.
@@ -32,17 +33,25 @@ including defects found by audit and bugs found by running the code against the 
 
 Those Armenian strings are real output from the live pipeline, not examples.
 
-**Not built yet:** retrieval, Gemini extraction, validation, snapshots, change detection, the
-reviewer interface, the ADK agent, the CLI, demos, the evaluation set. Phases 5–9.
+And then answers, per tariff field, which passages state it:
+
+```
+consumer_loan   gate 9/10 · recall@4 9/10   (the 10th is application_fee, which the
+                documents genuinely never state — the gate says so rather than guessing)
+mortgage        gate 10/10 · recall@4 10/10 — values on pages 1–7 of the ամփոփագիր
+```
+
+**Not built yet:** Gemini extraction, validation, snapshots, change detection, the reviewer
+interface, the ADK agent, the CLI, demos, the evaluation set. Phases 6–9.
 
 ---
 
 ## 2. Architecture
 
 ```
-query ─► product_matcher ─► sources ─► SafeHttpClient ─► documents ─► (Phase 5: RAG)
-         synonyms+fuzzy     ranking     allowlist,caps    parse/OCR
-              │                │            │                │
+query ─► product_matcher ─► sources ─► SafeHttpClient ─► documents ─► rag ─► (Phase 6)
+         synonyms+fuzzy     ranking     allowlist,caps    parse/OCR   chunk+search
+              │                │            │                │           │
               └── config/products.yaml ─────┴── allowlist.yaml, discovery.yaml
 ```
 
@@ -54,6 +63,7 @@ query ─► product_matcher ─► sources ─► SafeHttpClient ─► documen
 | `http/` | The only code permitted to open a network connection |
 | `discovery/` | Which product was meant; which sources are authoritative |
 | `documents/` | Bytes → clean pages, tables and sections |
+| `rag/` | Chunking, indexing, and answering "which passages state this field?" |
 | `observability/` | Structured JSON logs, correlated per run, written per run to a file |
 
 **What the model will decide (Phase 6):** which retrieved chunk answers a tariff field, and
@@ -169,6 +179,60 @@ the tariff PDF served from three URLs is one document.
 
 ---
 
+---
+
+## 6.5 Phase 5 — Retrieval
+
+Answers one question per tariff field: **which passages state this, and does any of them
+really?** The second half matters as much as the first — a retriever always returns its nearest
+neighbour, and an extractor will quote whatever it is given.
+
+**Armenian first.** «տոկոսադրույք» occurs in five inflected forms; a light suffix stripper
+collapses them, and it is the largest single accuracy contributor in the phase. Tesseract's
+«և»→«ն» confusion is folded for matching only — **measured across 26,054 corpus tokens and
+1,591 distinct folded forms to collide with no real word.** Numbers stay whole, because «13,5%»
+and «1,000,000» are what is being looked for.
+
+**Chunks protect the evidence trail.** None spans a page (evidence cites one page), each
+carries exact offsets into the page text so a quote can be *verified* rather than guessed at,
+and a split never falls inside a number. A table is its own chunk carrying its heading **inside
+the text** — «0.5% | ամսական» means nothing until «Սպասարկման վճար» sits above it, and the model
+sees text, not metadata.
+
+**Ranking fuses BM25 and embeddings by rank**, with two corrections the real documents forced:
+query phrasings are weighted canonical-first, and a third ranking promotes chunks that mention
+the field *and* contain a value of its declared kind — without which BM25 ranked a marketing
+banner above the rate table it advertises.
+
+**The relevance gate is lexical, by measurement, not preference:**
+
+| field on the consumer page | max cosine | actually stated? |
+|---|---|---|
+| `application_fee` | **0.687** | **no** |
+| `collateral` | 0.687 | yes |
+| `currency` | 0.682 | yes |
+
+Gemini's similarities sit in a 0.63–0.81 band regardless of relevance, so no floor separates
+present from absent. Embeddings rank; only a lexical hit — requiring the term's *identifying*
+token, not just its common words — decides that an answer exists.
+
+**Both modes measured on the real documents:**
+
+| | gate | recall@4 | top-1 |
+|---|---|---|---|
+| BM25 only | **19/20** | 18/20 | **14/20** |
+| Gemini + BM25 | 18/20 | **19/20** | 12/20 |
+
+Semantic ranking buys one field of recall and costs one of gate accuracy and two of top-1, for
+an API dependency and a per-run cost. On this corpus, with query terms written in the bank's own
+vocabulary, lexical retrieval is at least as good. The hybrid remains the default when a key is
+configured — but the number is reported rather than assumed, and a bank whose documents
+paraphrase more would likely invert it.
+
+Primary and supporting sources are searched separately, because ACBA's own documents disagree:
+the 2023 mortgage summary states 11.9–12.5% where the current product page says 13.75–14.5%.
+Phase 6 needs to see that as a `conflict`, not average over it.
+
 ## 7. What running it against the real site found
 
 Six defects that reasoning alone did not catch. Each is fixed, with a test that fails if it
@@ -182,6 +246,11 @@ returns. This is offered as evidence of method, not of foresight.
 | 4 | Cleaning ran before scoring | Corrupted text scored **1.00**, beat OCR, and `50 0,000,000` was accepted as an amount |
 | 4 | Line joining before furniture removal | Repeated headers unmatchable, so never removed |
 | 4 | "Densest container" HTML heuristic | **19 of 21** interest-rate mentions silently discarded |
+| 5 | Query terms written from the field's *title* | `salary_privileges` matched nothing; ACBA writes it differently |
+| 5 | BM25 ranked a marketing banner above the rate table | Extraction shown a slogan instead of the tariff |
+| 5 | A similarity floor for the relevance gate | A fee the documents never state reported as present |
+| 5 | Embedding rate limit dropped a whole product's vectors | Silent loss of semantic ranking, all-or-nothing |
+| 4 | PDFs had no section detection at all | Every PDF's evidence would carry an empty section |
 
 A separate audit of the code found three more, also fixed: an exception-hierarchy accident that
 let a 503 on `robots.txt` be swallowed as "skip this page" (defeating a documented guarantee); a
@@ -206,6 +275,9 @@ retries and pacing, mocked Tesseract for OCR logic plus one real-binary test tha
 | Document cleaning — each rule alone | 16 |
 | Text quality — every failure mode | 7 |
 | Document processing — strategies, PDF, HTML, tables, OCR | 28 |
+| RAG text — stemming, folding, the identifying-token rule | 13 |
+| Chunking — page boundaries, offsets, tables, metadata | 10 |
+| Retrieval — fusion, the gate, index reuse, degradation | 19 |
 
 Fixtures are trimmed **real** ACBA pages, each headed with its source URL and fetch date. Real
 markup is what caught the `http://` PDF link, the three URLs serving one document, and the
@@ -224,9 +296,15 @@ one bank · unlisted transliterations will not resolve · value kinds are coarse
 normalizer must handle percentages, amounts and «անվճար») · single-threaded and synchronous.
 
 **Document limits:** content genuinely identical at the edge of every page is indistinguishable
-from a footer and is removed · Tesseract reads «և» as «ն», so values are sound but term matching
-suffers until Phase 5 folds the spellings · a table detected on a graphics-heavy page may be
-refused as junk when it is real.
+from a footer and is removed · a table detected on a graphics-heavy page may be refused as junk
+when it is real.
+
+**Retrieval limits:** the Armenian stemmer is rule-based and does not model vowel alternation,
+so «ամփոփագիր» and its genitive «ամփոփագրի» do not meet, nor «ուսումնասիրության» and
+«ուսումնասիրման» · fusion weights and the 60% term-coverage threshold were tuned against two
+products and are not yet measured by an evaluation set · there is no reranker, which is the
+honest production next step · the «և»→«ն» folding is collision-free *in this corpus*, not in
+general.
 
 **Scope limits:** two products at one bank; `consumer_loan` means one purchasable product, not
 the family · Armenian-language sources only · **a reviewer's decision is not remembered**, so a
@@ -245,16 +323,16 @@ since Armenian tariff tables are the hardest thing the system does).
 | 5.2 | Focused tools | Phase 8 · the functions they will wrap exist and are pure |
 | 5.3 | Official source discovery | ✅ |
 | 5.4 | PDF, OCR and document processing | ✅ |
-| 5.5 | Chunking and RAG | Phase 5 · per-field query terms and clean sections exist |
+| 5.5 | Chunking and RAG | ✅ chunking with §5.5 metadata, hybrid retrieval, relevance gate, both modes measured |
 | 5.6 | Structured extraction | Schema ✅ · extraction Phase 6 |
 | 5.7 | Evidence and provenance | Model, sections and page rules ✅ · populated Phase 6 |
 | 5.8 | Deterministic validation | Invariants ✅ · normalizers Phase 6 |
 | 5.9 | Change detection | Storage contract, revalidation, `checked_at` ✅ · diff Phase 7 |
 | 5.10 | Human-in-the-loop | Triggers ✅ · reviewer interface Phase 7 |
-| 5.11 | Error handling | 🟡 network, HTTP, robots, discovery, parse and OCR ✅ · model and snapshot failures remain |
+| 5.11 | Error handling | 🟡 network, HTTP, robots, discovery, parse, OCR, embedding failure and irrelevant retrieval ✅ · model and snapshot failures remain |
 | 5.12 | Security | 🟡 allowlist, redirects, caps, robots, XML safety, render cap, secrets ✅ · tool least-privilege and prompt injection arrive with tools and prompts |
 | 5.13 | Observability | 🟡 structured logs, per-run files, run correlation, per-decision reasons ✅ · run metrics remain |
-| 5.14 | Testing | 🟡 223 tests ✅ · evaluation dataset Phase 9 |
+| 5.14 | Testing | 🟡 265 tests ✅ · evaluation dataset Phase 9 |
 | 5.15 | Python engineering | ✅ structure, type hints, config, logging, tests, pyproject, README, git history |
 
 ---

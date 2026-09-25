@@ -3,10 +3,11 @@
 How the ACBA tariff monitoring agent is put together: the modules, the order they
 run in, and the decisions behind them.
 
-> **Current state: Phase 3 of 9.** Contracts, the guarded HTTP layer and discovery are
-> built: a fuzzy product name resolves to a product, and to the official ACBA pages and
-> documents that state its tariffs. Document processing, RAG, extraction, snapshots, HITL
-> and the ADK agent are not. Sections marked *(Phase N)* name the phase that built them;
+> **Current state: Phase 5 of 9.** A fuzzy product name resolves to a product, to its
+> official ACBA sources, and those sources are parsed into clean pages, tables and sections
+> and then indexed — so the system answers, per tariff field, *which passages state this, and
+> is any of them actually relevant?* Extraction, validation, snapshots, change detection, HITL
+> and the ADK agent are not built. Sections marked *(Phase N)* name the phase that built them;
 > anything describing a later phase is written in the future tense.
 
 ---
@@ -75,15 +76,41 @@ src/tariff_agent/
     product_matcher.py         fuzzy product name -> product id, or a reviewer decision
     sitemap.py                 defusedxml sitemap parsing, degrading to [] on failure
     sources.py                 ranking pages and PDFs into primary + supporting sources
+  documents/
+    document.py                Document / Page / Table / Section contracts
+    pdf.py                     two PyMuPDF readings of every page
+    ocr.py                     300 dpi render + Tesseract, capped
+    strategies.py              which reading of a page wins, and why
+    quality.py                 0-1 text score with named fatal defects
+    cleaning.py                Armenian-aware cleaning rules, one per function
+    tables.py                  table extraction, and refusing what is not a table
+    sections.py                heading detection from text shape
+    html.py                    a product page as a first-class document
+    processing.py              the façade: bytes -> Document
+  rag/
+    text.py                    Armenian stemming, «և» folding, tokenization
+    chunking.py                page- and section-aware chunks with exact offsets
+    bm25.py                    lexical index + document frequency
+    embeddings.py              Gemini embeddings, or an honest absence
+    index.py                   per-document index keyed by content hash
+    retrieval.py               weighted RRF fusion and the relevance gate
+    knowledge.py               the façade: documents -> retriever
   observability/logging.py     single-line JSON logs with a per-run correlation id
 tests/
-  test_phase1_contracts.py     49 tests: registry, config, invariants, snapshot migration
+  test_phase1_contracts.py     52 tests: registry, config, invariants, migration, run logs
   test_url_policy.py           19 tests: lookalike hosts, schemes, encoding, relative links
-  test_http_client.py          25 tests: retries, caps, redirects, revalidation, offline
-  test_robots.py                5 tests: allow / disallow / 5xx stops the run
+  test_http_client.py          30 tests: retries, caps, redirects, revalidation, pacing
+  test_robots.py                6 tests: allow / disallow / 5xx stops the run
   test_product_matcher.py      31 tests: hy/en/ru, typos, ambiguity, unsupported products
-  test_discovery_sources.py    29 tests: scoring, primary selection, budgets, HITL
-  fixtures/discovery/          trimmed REAL ACBA pages, headed with URL and fetch date
+  test_discovery_sources.py    34 tests: scoring, primary selection, budgets, HITL, sitemaps
+  test_document_cleaning.py    16 tests: each cleaning rule alone
+  test_document_quality.py      7 tests: every extraction failure mode
+  test_document_processing.py  28 tests: strategies, PDF, HTML, tables, OCR
+  test_rag_text.py             13 tests: stemming, folding, the identifying-token rule
+  test_rag_chunking.py         10 tests: page boundaries, offsets, tables, metadata
+  test_rag_retrieval.py        19 tests: fusion, the gate, index reuse, degradation
+  fixtures/                    trimmed REAL ACBA pages + synthetic PDFs reproducing defects
+data/samples/ocr/              a real ACBA page rendered to an image, for the OCR test
 ```
 
 Dependencies run one way, with no cycles:
@@ -98,6 +125,9 @@ logging.py ┘                         logging.py ┘              │
                                                           http/robots.py ┘   │
                                                                              ▼
                                         discovery/{product_matcher, sitemap, sources}.py
+                                                                             │
+                                                                             ▼
+                                        documents/* ─────────────► rag/* ────► (Phase 6)
 ```
 
 The two modules everything imports — `fields.py` and `errors.py` — depend on nothing
@@ -239,6 +269,50 @@ Two refinements the real site forced, both in `products.yaml` rather than in cod
   «վերանորոգման» is excluded for the mortgage specifically. An unrecognised rival still stops
   the run, which a test pins.
 
+### `documents/` — bytes into quotable text *(Phase 4)*
+
+Every page is read by **every available strategy** and the best is kept, because the real
+mortgage summary's text layer is broken four ways — one word per line, glued words, 53 of
+1,593 characters, and a dropped digit in an amount — while OCR reads it at 91.9% confidence.
+The parse does not *fail* there; it returns plausible text with a digit missing, which is worse.
+So OCR is a peer, not a fallback, and `Page.method` records which won.
+
+`quality.py` scores candidates on one scale with **named fatal defects** (`glued_words`,
+`one_word_per_line`, `few_letters`, `unreadable_characters`), so a low score is explainable in a
+log line. Scoring happens **before** lines are joined: joining first turned one-word-per-line
+text into prose and it scored a perfect 1.00.
+
+`cleaning.py` is deliberately timid — only unambiguous thousand groups are rejoined, because
+«10 59 10 10» in the real document is a phone number — and never touches table cells, where a
+repeated short line is «0%» in another row. `tables.py` refuses what PyMuPDF reports as a table
+on a graphics-heavy page (`['ն','և','','']`). `html.py` takes the whole content container after
+stripping chrome: an allow-list of tags, and then a "densest container" heuristic, each lost
+most of the page.
+
+### `rag/` — which passages state a field *(Phase 5)*
+
+Armenian morphology does most of the work: «տոկոսադրույք» appears in five inflected forms, and
+a light stemmer collapses them. Tesseract's «և»→«ն» confusion is folded for matching only —
+measured across 26,054 corpus tokens to collide with **no** real word.
+
+Chunks never span a page and carry exact offsets into `Page.text`, so Phase 6 can verify a quote
+rather than guess at it. A table is its own chunk with its heading **inside the text**, because
+the model sees text and not metadata.
+
+Ranking fuses BM25 and embeddings by rank (RRF), weighted: query phrasings canonical-first, and
+a third ranking that promotes chunks which mention the field **and** contain a value of its
+declared `ValueKind` — without which BM25 ranked a marketing banner above the rate table it
+advertises.
+
+**The relevance gate is lexical, by measurement.** On the consumer page the maximum cosine for
+an application fee it never mentions was 0.687, while «Արժույթ», stated plainly, reached 0.682.
+No floor separates them, so embeddings rank and only a lexical hit — requiring the term's
+*identifying* token — decides that an answer exists.
+
+Primary and supporting sources are searched separately, because the bank's documents disagree
+(the 2023 summary says 11.9–12.5% where the current page says 13.75–14.5%) and Phase 6 needs to
+see that as a conflict rather than average over it.
+
 ### `config.py` — split by who needs to audit it
 
 - **Secrets → environment.** `Settings` (pydantic-settings) reads `.env`. App variables use
@@ -290,6 +364,10 @@ is in **[DECISIONS.md](DECISIONS.md)**, grouped by phase. The six that shape eve
 | P2-D11 | The cache revalidates, never short-circuits | A monitor that never asks the server cannot detect a change |
 | P3-D10 | Primary **plus** supporting sources | The consumer-loan page holds its own rates; a single winner reports the wrong document |
 | P3-D2 | Synonyms + fuzzy + penalty list | `token_set_ratio("business mortgage", "mortgage")` is 100 |
+| P4-D1 | OCR is a peer strategy, not a fallback | The authoritative mortgage PDF parses to plausible text with a digit missing |
+| P4-D3 | Score before joining lines | Cleaning first made corrupted text score a perfect 1.00 |
+| P5-D6 | The relevance gate is lexical | An absent field out-scored two present ones on cosine — no floor separates them |
+| P5-D14 | Measured both retrieval modes | BM25-only matches the hybrid here; reported rather than assumed |
 
 ## 5. Test strategy
 
@@ -308,7 +386,13 @@ a report) and lighter on plumbing:
 | HTTP client | 25 | 404/403 not retried, 5xx retried then succeeds, capped `Retry-After`, oversize aborted, mislabelled content rejected, off-domain redirect refused, 304 revalidation, offline mode |
 | robots.txt | 5 | disallowed path refused, 404 allows, 5xx stops the run, fetched once per host |
 | Product matching | 31 | hy/en/ru + transliterations, typos, «loan» ambiguity, business products refused, nonsense refused, NFC equivalence, determinism |
-| Discovery | 29 | sitemap traps and XML bombs, page-selection floors, keyword and path scoring, primary/supporting split, canonical page beats category page, known neighbour suppressed but unknown rival still escalates, crawl budget, seed fallback, broken page mid-crawl |
+| Discovery | 34 | sitemap traps and XML bombs, index following, page-selection floors, keyword and path scoring, primary/supporting split, canonical page beats category page, known neighbour suppressed but unknown rival still escalates, crawl budget, seed fallback, broken page mid-crawl |
+| Document cleaning | 16 | each rule alone: «10 000 000» rejoined but the phone number «10 59 10 10» untouched, «և» preserved, table cells spared, furniture removed only when repeated |
+| Text quality | 7 | clean prose scores high; one-word-per-line, glued words and mojibake all score below 0.25 with their defect named |
+| Document processing | 28 | strategy selection in every branch, corrupt and encrypted PDFs, page cap, HTML content kept, evidence page is None for HTML, one doc_id from two URLs, real Tesseract on a real scanned page |
+| RAG text | 13 | five inflected forms reach one stem, OCR folding, numbers kept whole, the identifying-token rule accepting a paraphrase and refusing common words |
+| Chunking | 10 | never spans a page, offsets round-trip, overlap, table chunks carry their heading, split tables repeat the header, no split inside a number |
+| Retrieval | 19 | RRF maths and weighting, table beats prose, primary/supporting kept apart, similarity alone cannot declare a field present, degradation flagged, index reuse embeds nothing twice, corrupt index rebuilds |
 
 *(Phase 9)* adds an evaluation dataset measuring product-resolution accuracy, retrieval hit
 rate, field match, NOT_FOUND precision and evidence-verification rate.
@@ -321,9 +405,9 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 | 1.5 | Schema versioning, status rework, deterministic confidence, docs | ✅ |
 | 2 | Safe HTTP client: allowlist per redirect hop, size/MIME caps, bounded retries | ✅ |
 | 3 | Product resolution + official source discovery | ✅ |
-| 4 | PDF/HTML processing, cleaning, OCR fallback | next |
-| 5 | Chunking + hybrid BM25/embedding RAG | |
-| 6 | Gemini structured extraction + deterministic validation | |
+| 4 | PDF/HTML processing, cleaning, OCR fallback | ✅ |
+| 5 | Chunking + hybrid BM25/embedding RAG | ✅ |
+| 6 | Gemini structured extraction + deterministic validation | next |
 | 7 | Snapshots, normalized diffing, human-in-the-loop | |
 | 8 | ADK agent, pipeline, CLI | |
 | 9 | Demos, evaluation dataset, remaining docs | |
