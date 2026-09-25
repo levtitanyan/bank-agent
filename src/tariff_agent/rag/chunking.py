@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
-from tariff_agent.documents.document import Document, Page, Table
+from tariff_agent.documents.document import Document, DocumentKind, Page, Table
 from tariff_agent.models import Language
 from tariff_agent.observability.logging import get_logger
 
@@ -72,10 +72,16 @@ class Chunk:
         char_end: Offset just past the passage.
         chunk_type: Text or table.
         source_role: Primary or supporting source.
+        document_kind: Whether the source was a PDF or an HTML page. Evidence
+            from HTML reports no page number, because it has none, and the
+            chunk is the only thing the extraction layer sees.
         document_name: Title, for evidence and for the reviewer.
         source_url: Where the document came from.
         language: Document language.
         retrieved_at: When the document was downloaded.
+        document_date: The date the document states for itself, when it does.
+            Carried here so a conflict between two sources can show that one of
+            them is years older than the other.
     """
 
     chunk_id: str
@@ -84,13 +90,20 @@ class Chunk:
     page: int
     chunk_type: ChunkType
     source_role: SourceRole
+    document_kind: DocumentKind
     document_name: str
     source_url: str
     language: Language
     retrieved_at: datetime
     section: str | None = None
+    document_date: date | None = None
     char_start: int | None = None
     char_end: int | None = None
+
+    @property
+    def evidence_page(self) -> int | None:
+        """The page number to cite, or None when the source has no pages."""
+        return None if self.document_kind is DocumentKind.HTML else self.page
 
     @property
     def is_table(self) -> bool:
@@ -303,10 +316,12 @@ def _chunk_page(
             page=page.number,
             chunk_type=chunk_type,
             source_role=source_role,
+            document_kind=document.kind,
             document_name=document.document_name,
             source_url=document.source_url,
             language=document.language,
             retrieved_at=document.retrieved_at,
+            document_date=document.document_date,
             section=section,
             char_start=start,
             char_end=end,

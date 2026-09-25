@@ -17,7 +17,7 @@ properties are load-bearing:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from tariff_agent.models import Language
@@ -134,6 +134,10 @@ class Document:
         language: Language of the document body.
         retrieved_at: When these bytes were downloaded.
         checked_at: When the bank last confirmed them current.
+        document_date: The date the document states for itself - «Թարմացվել է
+            առ՝ 15.05.2023թ.» - or None. Retrieval time says when *we* fetched
+            it; this says how old the bank's own content is, which is what
+            settles a disagreement between two official sources.
         pages: The pages, in order.
         sections: Detected headings and their spans.
         quality: Worst page quality, weighted by page length.
@@ -150,6 +154,7 @@ class Document:
     retrieved_at: datetime
     checked_at: datetime
     pages: tuple[Page, ...]
+    document_date: date | None = None
     sections: tuple[Section, ...] = ()
     quality: float = 0.0
     needs_review: bool = False

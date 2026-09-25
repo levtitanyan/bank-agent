@@ -8,10 +8,11 @@ escalating to a human when it cannot decide safely.
 
 Python 3.11 · Google ADK · Gemini
 
-> **Status: Phase 5 of 9.** A fuzzy product name resolves to a product, to its official
-> ACBA sources, and those sources are parsed into clean pages, tables and sections and then
-> indexed — so the system can now answer, per tariff field, *which passages state this, and
-> is any of them actually relevant?* No extraction or model calls yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> **Status: Phase 6 of 9.** A fuzzy product name resolves to a product, to its official
+> ACBA sources, those sources are parsed into clean pages, tables and sections, indexed, and
+> read by Gemini into the ten tariff fields — each carrying a quote verified against the
+> passage it came from, normalized deterministically, and validated. Snapshots, change
+> detection, the reviewer interface and the ADK agent are not built yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for the design and the roadmap.
 
 ---
@@ -35,7 +36,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the checks
 
 ```bash
-pytest                            # 265 tests, none of which touch the network
+pytest                            # 326 tests, none of which touch the network
 ruff check src tests              # lint + docstring rules
 mypy                              # strict type checking of src/
 ```

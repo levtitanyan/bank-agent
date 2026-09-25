@@ -17,10 +17,11 @@ import base64
 import json
 import struct
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from tariff_agent.documents.document import DocumentKind
 from tariff_agent.errors import EmbeddingError, KnowledgeIndexError
 from tariff_agent.models import Language
 from tariff_agent.observability.logging import get_logger
@@ -29,9 +30,14 @@ from tariff_agent.rag.embeddings import Embedder
 
 logger = get_logger(__name__)
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 """Bumped when chunking or serialization changes in a way that invalidates
-stored entries."""
+stored entries.
+
+Version 2 added ``document_kind`` and ``document_date`` to chunks. Without the
+bump, a cached version-1 index would load HTML chunks defaulted to ``pdf``, and
+their evidence would cite a page number that the source does not have.
+"""
 
 BM25_ONLY = "bm25-only"
 """Embedder name recorded when an index holds no vectors."""
@@ -201,7 +207,14 @@ def build_document_index(
     name = embedder.name if embedder else BM25_ONLY
     if directory is not None:
         cached = load_index(directory, doc_id, name)
-        if cached is not None and len(cached.chunks) == len(chunks):
+        # Length alone is not identity: a chunk schema change keeps the count
+        # and alters the content, which is what INDEX_VERSION guards. The text
+        # check catches a re-chunking that happens to produce the same number.
+        if (
+            cached is not None
+            and len(cached.chunks) == len(chunks)
+            and all(old.text == new.text for old, new in zip(cached.chunks, chunks, strict=True))
+        ):
             logger.info(
                 "index_reused",
                 extra={"doc_id": doc_id[:12], "chunks": len(cached.chunks), "embedder": name},
@@ -243,11 +256,13 @@ def _chunk_to_json(chunk: Chunk) -> dict[str, Any]:
         "text": chunk.text,
         "page": chunk.page,
         "chunk_type": chunk.chunk_type.value,
+        "document_kind": chunk.document_kind.value,
         "source_role": chunk.source_role.value,
         "document_name": chunk.document_name,
         "source_url": chunk.source_url,
         "language": chunk.language.value,
         "retrieved_at": chunk.retrieved_at.isoformat(),
+        "document_date": chunk.document_date.isoformat() if chunk.document_date else None,
         "section": chunk.section,
         "char_start": chunk.char_start,
         "char_end": chunk.char_end,
@@ -269,11 +284,15 @@ def _chunk_from_json(payload: dict[str, Any]) -> Chunk:
         text=payload["text"],
         page=payload["page"],
         chunk_type=ChunkType(payload["chunk_type"]),
+        document_kind=DocumentKind(payload.get("document_kind", "pdf")),
         source_role=SourceRole(payload["source_role"]),
         document_name=payload["document_name"],
         source_url=payload["source_url"],
         language=Language(payload["language"]),
         retrieved_at=datetime.fromisoformat(payload["retrieved_at"]),
+        document_date=(
+            date.fromisoformat(payload["document_date"]) if payload.get("document_date") else None
+        ),
         section=payload.get("section"),
         char_start=payload.get("char_start"),
         char_end=payload.get("char_end"),

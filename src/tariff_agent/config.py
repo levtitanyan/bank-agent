@@ -158,6 +158,8 @@ class RagSettings(BaseModel):
             does **not** gate relevance: measured on the real corpus, an absent
             field scored a higher cosine than fields the page states.
         index_dir: Where per-document indexes are cached.
+        extraction_cache_dir: Where model answers are cached, so a repeated run
+            over unchanged documents makes no requests at all.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -168,6 +170,7 @@ class RagSettings(BaseModel):
     embedding_model: str = "gemini-embedding-001"
     similarity_floor: float = Field(default=0.55, ge=0, le=1)
     index_dir: Path = PROJECT_ROOT / "data" / "index"
+    extraction_cache_dir: Path = PROJECT_ROOT / "data" / "cache" / "extractions"
 
 
 class Settings(BaseSettings):
@@ -179,6 +182,9 @@ class Settings(BaseSettings):
 
     Attributes:
         gemini_model: Model id used for extraction (env ``TARIFF_GEMINI_MODEL``).
+            Defaults to a flash-lite model for quota reasons rather than
+            preference: the free tier allows twenty requests a day for
+            ``gemini-2.5-flash``, and one two-product run makes about sixteen.
         log_level: Root log level (env ``TARIFF_LOG_LEVEL``).
         runs_dir: Where each run's ``log.jsonl`` is written when file logging is
             armed with ``configure_logging(runs_dir=...)``.
@@ -205,7 +211,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     log_level: str = "INFO"
     runs_dir: Path = PROJECT_ROOT / "data" / "runs"
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")

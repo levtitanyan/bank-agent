@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tariff_agent.documents.document import DocumentKind
 from tariff_agent.errors import EmbeddingError, KnowledgeIndexError
 from tariff_agent.fields import get_field
 from tariff_agent.models import Language
@@ -49,6 +50,7 @@ def make_chunk(
         page=page,
         chunk_type=chunk_type,
         source_role=role,
+        document_kind=DocumentKind.PDF,
         document_name="Տեղեկատվական ամփոփագիր",
         source_url="https://www.acba.am/files/loan%20info.pdf",
         language=Language.HY,
@@ -392,3 +394,65 @@ def test_a_value_stating_chunk_is_always_returned() -> None:
     result = retriever.search_field(get_field("service_fee"), k=2)
     assert any(chunk.chunk.chunk_id == "c099" for chunk in result.primary)
     assert result.is_relevant
+
+
+def test_an_index_is_not_reused_when_the_chunk_text_changed(tmp_path: Path) -> None:
+    """Chunk count is not chunk identity.
+
+    A change to how documents are chunked can produce the same number of chunks
+    with different text. Reusing vectors across that would answer questions
+    about text the index no longer holds - and the same gap once let a cached
+    index return HTML chunks labelled as PDF, whose evidence then claimed page
+    numbers the source does not have.
+    """
+    original = [make_chunk(0, RATE_TEXT)]
+    embedder = FakeEmbedder({RATE_TEXT: [1.0, 0.0, 0.0], TERM_TEXT: [0.0, 1.0, 0.0]})
+    build_document_index("f" * 64, original, embedder=embedder, directory=tmp_path)
+    assert embedder.document_calls == 1
+
+    rechunked = [make_chunk(0, TERM_TEXT)]
+    rebuilt = build_document_index("f" * 64, rechunked, embedder=embedder, directory=tmp_path)
+    assert embedder.document_calls == 2, "changed text must be re-embedded"
+    assert rebuilt.chunks[0].text == TERM_TEXT
+
+
+def test_the_chunk_schema_cannot_change_without_bumping_the_index_version() -> None:
+    """A chunk field added without a version bump serves stale data silently.
+
+    That happened: ``document_kind`` was added, cached indexes kept loading and
+    defaulted HTML chunks to PDF, and their evidence would have cited page
+    numbers the source does not have. This test pins the schema to the version,
+    so adding a field fails here until INDEX_VERSION is raised - which is the
+    moment to think about what the stored entries now mean.
+    """
+    import dataclasses
+
+    fields = tuple(sorted(field.name for field in dataclasses.fields(Chunk)))
+    expected_by_version = {
+        2: (
+            "char_end",
+            "char_start",
+            "chunk_id",
+            "chunk_type",
+            "doc_id",
+            "document_date",
+            "document_kind",
+            "document_name",
+            "language",
+            "page",
+            "retrieved_at",
+            "section",
+            "source_role",
+            "source_url",
+            "text",
+        ),
+    }
+    assert INDEX_VERSION in expected_by_version, (
+        f"Chunk schema or index format changed: INDEX_VERSION is {INDEX_VERSION} but this test "
+        "only knows how to check the versions listed here. Add the new field list, and decide "
+        "what happens to indexes written under the previous version."
+    )
+    assert fields == expected_by_version[INDEX_VERSION], (
+        "Chunk fields changed without bumping INDEX_VERSION. A cached index written under the "
+        f"current version {INDEX_VERSION} would be loaded with missing or defaulted fields."
+    )

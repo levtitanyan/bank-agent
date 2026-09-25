@@ -906,6 +906,161 @@ is configured, as specified — but the number is reported rather than assumed, 
 defaulting to BM25-only is now an evidence-backed option rather than a preference.
 
 
+# Phase 6 — Extraction, verification and validation
+
+*The model reads; deterministic code decides whether what it read is usable.*
+
+### P6-D1 · Fields are extracted in groups of related fields
+**Requirement:** 5.6 · **File:** [`extraction/groups.py`](../src/tariff_agent/extraction/groups.py)
+
+| Option | Consequence |
+|---|---|
+| One call per field | Binds evidence most tightly, and costs ten calls per product — which matters on a free-tier quota and in a live demonstration |
+| One call for all ten | Cheapest, but the prompt would carry every passage retrieved for every field, and evidence stops being bound to the question that found it |
+| **Chosen: four groups** (rates / fees / terms / other) | A rate table states both rates; a fee schedule states all three fees. Each group's prompt holds only the passages retrieved for *its own* fields |
+
+A field that fails inside a group is retried alone, so a group failure is not contagious. A
+field the model *correctly* reports as absent is **not** retried — doing so spent a call per
+missing field and learned nothing.
+
+### P6-D2 · Every quote is matched back against the passage it was attributed to
+**Requirement:** 5.6 · 5.7 · **File:** [`extraction/verify.py`](../src/tariff_agent/extraction/verify.py)
+
+This is the mechanism behind the promise made in Phase 1. A model asked for a verbatim quote
+usually gives one; the difference between a real quote and a plausible paraphrase is the
+difference between a tariff and a guess. Quotes are matched at ≥0.90 (rapidfuzz, whitespace
+normalized) and anything unverifiable becomes NOT_FOUND.
+
+### P6-D3 · Citation correction is narrow on purpose
+**Requirement:** 5.7
+
+A quote found in a *different* passage is accepted only if that passage was retrieved **for the
+same field** — that is a citation slip. A quote that matches something else entirely is not
+corrected but refused: it is evidence that the answer did not come from what we asked about.
+
+### P6-D4 · Multiple stated values are kept, never collapsed
+**Requirement:** 5.6 · 5.7
+
+ACBA's consumer page states three nominal rates at once: 17.5-21.6% in the app, 20.1-21.6% at a
+branch, and 15.9% (13.9% for salary customers) on a special offer. Picking one silently would
+report a rate the customer may never be offered; a bare range loses which channel is which. The
+field carries the full range **and** a `variants` list, each variant separately quoted and
+separately verified. An unverifiable variant is dropped while the field keeps its range.
+
+### P6-D5 · Normalizers return None rather than guessing
+**Requirement:** 5.8 · **File:** [`extraction/normalize.py`](../src/tariff_agent/extraction/normalize.py)
+
+Written against the real strings: «20.1-21.6%», «13,5 %», «50,000-10,000,000 ՀՀ դրամ»,
+«50.000-10.000.000», «10 000 000», «9-60 ամիս», «մինչև 240 ամիս», «3 տարի», «ՀՀ դրամ և
+արտարժույթ», «անվճար». ACBA uses comma, dot and space grouping — sometimes in one document — so
+all three must collapse to one number, or the Phase 7 diff reports a change every time the bank
+reformats a page. A value that cannot be read returns None: the verbatim text is still
+reported, and the diff falls back to comparing text for that field.
+
+### P6-D6 · A failed check downgrades; it never edits
+**Requirement:** 5.8 · **File:** [`extraction/validate.py`](../src/tariff_agent/extraction/validate.py)
+
+Rates within 0-100, ranges ordered low to high, terms under fifty years, evidence on the
+allowlist, and an effective rate never below the nominal one it derives from. A field that
+fails becomes UNVERIFIED with the reason recorded and **keeps its original value**. Silently
+correcting a bank's published number is the one thing this system must not do.
+
+### P6-D7 · Conflicts compare normalized values, and carry both dates
+**Requirement:** 5.10 · **File:** [`extraction/conflict.py`](../src/tariff_agent/extraction/conflict.py)
+
+Only genuinely **disjoint** ranges count: «17.5-21.6%» and «20.1-21.6%» are one product through
+two channels, not a contradiction, and a false conflict costs a reviewer's attention. Each side
+of a real conflict carries its document's own date — parsed from «Թարմացվել է առ՝ 15.05.2023թ.»
+and «Ուժի մեջ է 2026թ. ապրիլի 29-ից» — because a reviewer shown two official sources needs to
+know that one of them is three years old.
+
+### P6-D8 · The offline extractor stamps itself
+**Requirement:** 5.13 · 5.14
+
+`RuleBasedExtractor` finds the first passage that mentions a field and contains a value of the
+expected kind. It is plainly worse than a model at reading prose, and it makes the whole suite
+and every demonstration runnable with no key. Its output records
+``extraction_method="rule_based"`` and the report prints it, so a demo can never be mistaken
+for a model extraction.
+
+### P6-D9 · The prompt states that documents are data
+**Requirement:** 5.12 prompt injection
+
+The model is shown numbered passages and nothing else — no HTML, no URLs it could be told to
+fetch. The prompt says once, plainly, that text inside a passage is data and any command found
+there is quoted text. Bank documents are not hostile, but they are text we did not write,
+retrieved automatically, and a tariff PDF is exactly the file an attacker would target to make
+an agent report a different number.
+
+### P6-D10 · A run fails only when nothing was recovered
+**Requirement:** 5.11
+
+A group whose call failed is retried field by field. The run is only declared failed when every
+attempted group failed **and** no field survived — a group failure the retries repaired is not
+a failed run, and treating it as one would throw away good values.
+
+
+### P6-D11 · The default model is chosen by quota, not by preference
+**Requirement:** 5.1 · 5.11
+
+`gemini-2.5-flash-lite` was configured until Google returned *"no longer available to new
+users"* for it. Its replacement, `gemini-2.5-flash`, then returned **429: quota exceeded,
+limit 20** — the free tier allows twenty generate-content requests a day, and one two-product
+run makes about fourteen. A model that permits a single demonstration per day is not a default.
+
+`gemini-3.5-flash-lite` is the default; `gemini-2.5-flash` remains configurable in one
+environment variable for an accuracy comparison. **This limit applies during a live review
+too**, which is what P6-D12 exists for.
+
+### P6-D12 · Model answers are cached, so a demonstration cannot fail on a quota
+**Requirement:** 5.11 · 5.13 · **File:** [`extraction/cache.py`](../src/tariff_agent/extraction/cache.py)
+
+An answer is keyed by everything that could change it: prompt version, model, requested fields,
+and the exact passages by document and chunk id. A re-run over unchanged documents makes **zero**
+requests and reports `from_cache=True`, because a cached run and a live one are different
+claims. `--no-cache` forces a real call when a reviewer wants to watch one happen.
+
+Measured: the second evaluation run of `gemini-3.5-flash-lite` over both products made **0 model
+calls** and produced identical values.
+
+### P6-D13 · Query terms come from the documents, again
+**Requirement:** 5.5 · 5.6
+
+`service_fee` was reported NOT_FOUND for the consumer loan while the tariff book states it:
+«**Առանց գրավի սպառողական վարկեր** … վարման ն **սպասարկման** նպատակով հաճախորդից
+**միջնորդավճար** [չի] գանձվում». ACBA writes «միջնորդավճար» (commission), not «վճար», so the
+query terms — taken from the field's title — never reached the chunk. Same failure as P5-D8, in
+a different field. `application_fee` was checked the same way and **stays NOT_FOUND**: its
+identifying term occurs zero times in either source, so the silence is the bank's, not ours.
+
+### P6-D14 · Two models measured, and the difference is in scope, not accuracy
+**Requirement:** 5.14
+
+| | fields correct | found | evidence verified | NOT_FOUND | calls |
+|---|---|---|---|---|---|
+| `gemini-3.5-flash-lite` | **11/11** | 14/20 | 14/14 | 6/20 | 0 *(cached)* |
+| `gemini-3.1-flash-lite` | **11/11** | 15/20 | 15/15 | 5/20 | 21 |
+| `gemini-2.5-flash` | — | — | — | — | quota exhausted |
+
+Scored against values read off the live pages by hand; fields not personally verified are
+excluded rather than guessed at. Both models were correct on every checked field, and every
+value either model reported carried evidence that verified.
+
+What separates them is *scope*, which a score does not show:
+
+* **currency, consumer loan.** 3.5-lite answered «ՀՀ դրամ» — the product page's own statement.
+  3.1-lite answered «ՀՀ դրամ, ԱՄՆ դոլար, եվրո, ՌԴ ռուբլի», which is true of the tariff book as
+  a whole and not of this product.
+* **nominal rate.** 3.5-lite gave «20.1-21.6%», the branch rate; 3.1-lite gave «13.9-21.6%»,
+  spanning the salary-customer offer to the branch maximum — which is closer to what the prompt
+  asks for, a full stated range.
+
+Neither is simply better. The measurable conclusion is that both are accurate enough that the
+*guard rails* — quote verification, the relevance gate, deterministic validation — do more for
+correctness here than the choice between them. `gemini-2.5-flash` could not be measured today:
+reporting a quota error as a quality result would be worse than saying so.
+
+
 # Tooling decisions
 
 ### T-D1 · mypy strict on `src` only
@@ -967,5 +1122,5 @@ review instead:
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 270 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 326 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |

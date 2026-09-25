@@ -140,6 +140,7 @@ TARIFF_FIELDS: Final[tuple[FieldSpec, ...]] = (
         query_terms=(
             "հայտի ուսումնասիրության վճար",
             "դիմումի ուսումնասիրման վճար",
+            "հայտի քննարկման միջնորդավճար",
             "application review fee",
         ),
     ),
@@ -149,7 +150,12 @@ TARIFF_FIELDS: Final[tuple[FieldSpec, ...]] = (
         label_en="Disbursement fee",
         kind=ValueKind.FEE,
         required=False,
+        # ACBA does not write «վճար» for these: it writes «միջնորդավճար»
+        # (commission), as in «վարկի տրամադրման պահին ... գանձվում է միանվագ
+        # միջնորդավճար». Query terms taken from the field's title instead of the
+        # documents are the commonest reason a stated value is reported missing.
         query_terms=(
+            "վարկի տրամադրման միանվագ միջնորդավճար",
             "վարկի տրամադրման վճար",
             "միանվագ վճար տրամադրման",
             "disbursement fee",
@@ -161,7 +167,15 @@ TARIFF_FIELDS: Final[tuple[FieldSpec, ...]] = (
         label_en="Service fee",
         kind=ValueKind.FEE,
         required=False,
-        query_terms=("սպասարկման վճար", "ամսական սպասարկման վճար", "service fee"),
+        # Same again: the tariff book states this as «վարկային հաշվի բացման,
+        # վարման և սպասարկման նպատակով ... միջնորդավճար», and the version with
+        # «վճար» alone never reached the chunk that answers it.
+        query_terms=(
+            "վարկային հաշվի սպասարկման միջնորդավճար",
+            "սպասարկման վճար",
+            "ամսական սպասարկման վճար",
+            "service fee",
+        ),
     ),
     FieldSpec(
         id="salary_privileges",

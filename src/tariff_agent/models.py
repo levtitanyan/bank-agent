@@ -108,6 +108,32 @@ class Evidence(BaseModel):
     quote: str = Field(min_length=1)
 
 
+class FieldVariant(BaseModel):
+    """One channel's version of a field, when the bank states several.
+
+    ACBA's consumer page states three nominal rates at once - 17.5-21.6% through
+    the app, 20.1-21.6% at a branch, and 15.9% (13.9% for salary customers) on a
+    special offer. Picking one silently would report a rate the customer may
+    never be offered, and collapsing them to a range alone loses which channel
+    each belongs to. So the field carries the full range *and* the breakdown.
+
+    Attributes:
+        label: What distinguishes this variant, in the document's own words -
+            «acba digital», «Մասնաճյուղ», «աշխատավարձային».
+        value: The value for this variant, verbatim.
+        normalized: Machine-comparable form, filled by validation.
+        evidence: Where this specific variant is stated. Each variant is quoted
+            separately, so a reviewer can check them one at a time.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    evidence: Evidence
+    normalized: dict[str, Any] | None = None
+
+
 class FieldValue(BaseModel):
     """One extracted tariff field: the value, how to verify it, how sure we are.
 
@@ -119,6 +145,8 @@ class FieldValue(BaseModel):
             ``None`` until validation runs, or when normalization failed.
         evidence: Source location of the value. ``None`` only when NOT_FOUND.
         status: See :class:`FieldStatus`.
+        variants: Per-channel breakdown, when the bank states more than one
+            value for this field. Empty when a single value applies.
         confidence: 0.0-1.0, or ``None`` when not computed yet.
 
             This is **never** the model's self-reported confidence: an LLM's own
@@ -135,6 +163,7 @@ class FieldValue(BaseModel):
     normalized: dict[str, Any] | None = None
     evidence: Evidence | None = None
     status: FieldStatus
+    variants: tuple[FieldVariant, ...] = ()
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
@@ -153,9 +182,19 @@ class FieldValue(BaseModel):
             )
         if is_sentinel and (self.evidence is not None or self.normalized is not None):
             raise ValueError(f"a {NOT_FOUND} field must not carry evidence or a normalized value")
+        if is_sentinel and self.variants:
+            raise ValueError(
+                f"a {NOT_FOUND} field must not carry variants: a field the document does "
+                "not state cannot have per-channel versions"
+            )
         if not is_sentinel and self.evidence is None:
             raise ValueError(f"field value {self.value!r} has no evidence; use {NOT_FOUND} instead")
         return self
+
+    @property
+    def has_variants(self) -> bool:
+        """Whether the bank states more than one value for this field."""
+        return bool(self.variants)
 
     @classmethod
     def not_found(cls, confidence: float | None = None) -> FieldValue:
@@ -193,6 +232,9 @@ class TariffExtraction(BaseModel):
         document_name: Primary document the values were extracted from.
         source_url: URL of that document.
         retrieved_at: When the document was fetched (UTC).
+        extraction_method: What produced these values - ``"gemini:<model>"`` or
+            ``"rule_based"`` for the offline extractor. Stamped on the report
+            too, so a demo run can never be mistaken for a model extraction.
         fields: Every registry field id mapped to its value. Always complete.
     """
 
@@ -204,6 +246,7 @@ class TariffExtraction(BaseModel):
     document_name: str
     source_url: HttpUrl
     retrieved_at: datetime
+    extraction_method: str = "unknown"
     fields: dict[str, FieldValue]
 
     @model_validator(mode="after")
