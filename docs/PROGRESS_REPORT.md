@@ -5,7 +5,7 @@ retrieval.
 
 | | |
 |---|---|
-| Tests | **265 passing**, none touching the network |
+| Tests | **270 passing**, none touching the network |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
 | Code | ~7,000 lines source (35 modules) · ~3,600 lines tests · 19 commits |
 | Verified against | `acba.am`, live, at each phase boundary — including a measured retrieval comparison |
@@ -220,14 +220,15 @@ token, not just its common words — decides that an answer exists.
 
 | | gate | recall@4 | top-1 |
 |---|---|---|---|
-| BM25 only | **19/20** | 18/20 | **14/20** |
-| Gemini + BM25 | 18/20 | **19/20** | 12/20 |
+| BM25 only | 19/20 | 19/20 | **16/20** |
+| Gemini + BM25 | 19/20 | 19/20 | 15/20 |
 
-Semantic ranking buys one field of recall and costs one of gate accuracy and two of top-1, for
-an API dependency and a per-run cost. On this corpus, with query terms written in the bank's own
-vocabulary, lexical retrieval is at least as good. The hybrid remains the default when a key is
-configured — but the number is reported rather than assumed, and a bank whose documents
-paraphrase more would likely invert it.
+Identical but for top-1, where lexical retrieval is better. Both fail the gate on exactly one
+field — the consumer application fee, which the documents never state, so both are correct
+there. Semantic ranking buys nothing measurable on this corpus, at the cost of an API
+dependency, a per-run charge and a rate-limit failure mode. The hybrid remains the default when
+a key is configured — but the number is reported rather than assumed, and a bank whose
+documents paraphrase more would likely invert it.
 
 Primary and supporting sources are searched separately, because ACBA's own documents disagree:
 the 2023 mortgage summary states 11.9–12.5% where the current product page says 13.75–14.5%.
@@ -250,6 +251,9 @@ returns. This is offered as evidence of method, not of foresight.
 | 5 | BM25 ranked a marketing banner above the rate table | Extraction shown a slogan instead of the tariff |
 | 5 | A similarity floor for the relevance gate | A fee the documents never state reported as present |
 | 5 | Embedding rate limit dropped a whole product's vectors | Silent loss of semantic ranking, all-or-nothing |
+| 5 | The gate passed on a *mention* of a fee that stated none | Extraction sent to a disclaimer with nothing to extract |
+| 5 | Ranking could decide a lexical gate | A field flipped to NOT_FOUND with no lexical fact changed |
+| 4 | A PDF bullet «o …» detected as a section heading | Evidence would cite a bullet as its section |
 | 4 | PDFs had no section detection at all | Every PDF's evidence would carry an empty section |
 
 A separate audit of the code found three more, also fixed: an exception-hierarchy accident that
@@ -332,7 +336,7 @@ since Armenian tariff tables are the hardest thing the system does).
 | 5.11 | Error handling | 🟡 network, HTTP, robots, discovery, parse, OCR, embedding failure and irrelevant retrieval ✅ · model and snapshot failures remain |
 | 5.12 | Security | 🟡 allowlist, redirects, caps, robots, XML safety, render cap, secrets ✅ · tool least-privilege and prompt injection arrive with tools and prompts |
 | 5.13 | Observability | 🟡 structured logs, per-run files, run correlation, per-decision reasons ✅ · run metrics remain |
-| 5.14 | Testing | 🟡 265 tests ✅ · evaluation dataset Phase 9 |
+| 5.14 | Testing | 🟡 270 tests ✅ · evaluation dataset Phase 9 |
 | 5.15 | Python engineering | ✅ structure, type hints, config, logging, tests, pyproject, README, git history |
 
 ---

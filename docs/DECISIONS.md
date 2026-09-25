@@ -796,6 +796,26 @@ refinements came from measurement:
   field declares a `ValueKind`, so a third ranking promotes chunks that mention the field **and**
   contain a value of that kind, tables first.
 
+### P5-D6a · A mention is not a statement, and ranking must not decide the gate
+**Requirement:** 5.6 · 5.11 irrelevant retrieval
+
+Two weaknesses, both found by questioning a *passing* result rather than a failing one.
+
+The gate originally asked only whether a field's identifying term occurred. The consumer page
+contains «ՎԱՐԿԻ ՏՐԱՄԱԴՐՄԱՆ և ՍՊԱՍԱՐԿՄԱՆ ԳԾՈՎ ԲՈԼՈՐ ՊԱՐՏԱԴԻՐ ՎՃԱՐՆԵՐԸ» — a disclaimer *about*
+service fees that states none — and the gate passed on it, which would have sent the extractor
+to a passage with nothing to extract. A field must now be mentioned **and** a value of its
+declared kind must appear in the same chunk, and the refusal distinguishes "mentioned but not
+stated" from "not mentioned at all".
+
+The gate also judged whatever ranking happened to return, so ranking noise could decide
+answerability: semantic ranking pushed the only chunk stating an application fee out of the top
+four and the field flipped to NOT_FOUND with no lexical fact having changed. One chunk that both
+mentions the field and states a value is now guaranteed a place in the results.
+
+A measurement bug was fixed alongside: recall was checked case-sensitively while retrieval
+case-folds, and ACBA writes whole paragraphs in capitals.
+
 ### P5-D6 · The relevance gate is lexical. Similarity was measured and rejected
 **Requirement:** 5.5 · 5.6 · 5.11 irrelevant retrieval
 
@@ -867,16 +887,23 @@ inverts above roughly 100k chunks**, which is why the index interface is four fu
 ### P5-D14 · Measured both ways, and the result is not the expected one
 **Requirement:** 5.5 · 5.14
 
+Measured after the gate fixes in P5-D6a and with case-folded recall checking:
+
 | | gate | recall@4 | top-1 |
 |---|---|---|---|
-| BM25 only | **19/20** | 18/20 | **14/20** |
-| Gemini + BM25 | 18/20 | **19/20** | 12/20 |
+| BM25 only | 19/20 | 19/20 | **16/20** |
+| Gemini + BM25 | 19/20 | 19/20 | 15/20 |
 
-Semantic ranking buys one field of recall and costs one field of gate accuracy and two of
-top-1, for an API dependency and a per-run cost. On *this* corpus, with query terms written in
-the bank's own vocabulary, lexical retrieval is at least as good. The hybrid remains the
-default when a key is configured, as specified — but the measurement is reported rather than
-assumed, and a bank whose documents paraphrase more would likely invert it.
+Identical except that lexical retrieval places the right chunk first once more often. Both fail
+the gate on exactly one field — the consumer application fee, which the documents genuinely
+never state, so both are *correct* there.
+
+Semantic ranking therefore buys nothing measurable on this corpus, at the cost of an API
+dependency, a per-run charge and a rate-limit failure mode. The query terms are written in the
+bank's own vocabulary, which is precisely the case lexical retrieval handles well; a bank whose
+documents paraphrase more would likely invert this. The hybrid remains the default when a key
+is configured, as specified — but the number is reported rather than assumed, and the case for
+defaulting to BM25-only is now an evidence-backed option rather than a preference.
 
 
 # Tooling decisions
@@ -940,5 +967,5 @@ review instead:
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 265 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 270 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |

@@ -26,6 +26,11 @@ MIN_BODY_CHARS = 40
 _SENTENCE_END = re.compile(r"[.!?:։]\s*$")
 _MOSTLY_DIGITS = re.compile(r"^[\d\s.,/%-]+$")
 
+# List markers, including the bare "o" that PDF bullets often extract as: the
+# mortgage summary yielded «o մինչև 6 ամիս (ներառյալ) վաղեմության դեպքում» as a
+# detected heading, which is a bullet item and not a section.
+_LIST_MARKER = re.compile(r"^(?:[•\-\u2013\u2014*]|o\s|\d{1,2}[.)]\s)", re.IGNORECASE)
+
 
 def detect_sections(page_text: str, page_number: int) -> list[Section]:
     """Detect headings on one page and the spans beneath them.
@@ -62,13 +67,13 @@ def _is_heading(line: str, following: str) -> bool:
         following: The line after it.
 
     Returns:
-        True when the line is short, unpunctuated, not numeric, and introduces
-        something longer than itself.
+        True when the line is short, unpunctuated, not numeric, not a list
+        item, and introduces something longer than itself.
     """
     if not (3 <= len(line) <= MAX_HEADING_CHARS):
         return False
     if _SENTENCE_END.search(line) or _MOSTLY_DIGITS.match(line):
         return False
-    if line.startswith(("•", "-", "\u2013")):
+    if _LIST_MARKER.match(line):
         return False
     return len(following) >= MIN_BODY_CHARS

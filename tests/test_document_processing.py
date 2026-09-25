@@ -412,3 +412,21 @@ def test_document_is_a_frozen_contract() -> None:
     assert isinstance(document, Document)
     with pytest.raises(AttributeError):
         document.quality = 0.1  # type: ignore[misc]
+
+
+def test_a_bullet_item_is_not_a_section_heading() -> None:
+    """The mortgage summary yielded «o մինչև 6 ամիս …» as a detected heading.
+
+    PDF bullets extract as a bare "o", and a short unpunctuated line followed by
+    a longer one is exactly what a heading looks like - so list items had to be
+    excluded explicitly, or evidence would cite a bullet as its section.
+    """
+    from tariff_agent.documents.sections import detect_sections
+
+    page = (
+        "o մինչև 6 ամիս (ներառյալ) վաղեմության դեպքում\n"
+        "տեքստ որը բավական երկար է որպեսզի համարվի մարմին և ոչ թե վերնագիր\n"
+        "Տոկոսադրույք\n"
+        "Անվանական տոկոսադրույքը կազմում է տասներեք և կես տոկոս տարեկան"
+    )
+    assert [section.title for section in detect_sections(page, 1)] == ["Տոկոսադրույք"]
