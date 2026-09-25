@@ -328,3 +328,67 @@ def test_an_unwritable_index_directory_is_reported(tmp_path: Path) -> None:
     )
     with pytest.raises(KnowledgeIndexError):
         save_index(index, blocked / "sub")
+
+
+# --------------------------------------------------------------------------- #
+# The gate distinguishes a mention from a statement
+# --------------------------------------------------------------------------- #
+
+DISCLAIMER = (
+    "ՓԱՍՏԱՑԻ ՏՈԿՈՍԱԴՐՈՒՅՔԸ ՑՈՒՅՑ Է ՏԱԼԻՍ, ԹԵ ՈՐՔԱՆ ԿԱՐԺԵՆԱ ՎԱՐԿԸ ՁԵԶ ՀԱՄԱՐ "
+    "ՎԱՐԿԻ ՏՐԱՄԱԴՐՄԱՆ և ՍՊԱՍԱՐԿՄԱՆ ԳԾՈՎ ԲՈԼՈՐ ՊԱՐՏԱԴԻՐ ՎՃԱՐՆԵՐԸ ԿԱՏԱՐԵԼՈՒ ԴԵՊՔՈՒՄ"
+)
+STATED_FEE = "Սպասարկման վճար՝ ամսական 0.5% վարկի մնացորդից"
+
+
+def test_a_mention_without_a_value_does_not_pass_the_gate() -> None:
+    """Taken verbatim from the consumer page.
+
+    That sentence discusses service fees and states none. A gate that asks only
+    whether the field is mentioned passed on it, which would have sent the
+    extractor to a passage with nothing to extract.
+    """
+    # A realistic corpus: with a single chunk, BM25's IDF scores every term at
+    # zero and nothing is retrieved at all, which tests a different thing.
+    corpus = [make_chunk(index, f"{NOISE_TEXT} {index}") for index in range(5)]
+    result = Retriever([*corpus, make_chunk(9, DISCLAIMER)]).search_field(
+        get_field("service_fee")
+    )
+    assert not result.is_relevant
+    assert "mentioned" in result.reason
+    assert "NOT_FOUND" in result.reason
+
+
+def test_a_mention_with_a_value_does_pass_the_gate() -> None:
+    """The same field, in a chunk that actually states a fee."""
+    corpus = [make_chunk(index, f"{NOISE_TEXT} {index}") for index in range(5)]
+    result = Retriever([*corpus, make_chunk(9, STATED_FEE)]).search_field(
+        get_field("service_fee")
+    )
+    assert result.is_relevant
+    assert result.best is not None
+    assert result.best.has_term and result.best.has_value
+
+
+def test_uppercase_armenian_is_matched() -> None:
+    """ACBA writes whole paragraphs in capitals; matching must be case-folded."""
+    upper = "ՍՊԱՍԱՐԿՄԱՆ ՎՃԱՐ՝ ԱՄՍԱԿԱՆ 0.5%"
+    corpus = [make_chunk(index, f"{NOISE_TEXT} {index}") for index in range(5)]
+    result = Retriever([*corpus, make_chunk(9, upper)]).search_field(get_field("service_fee"))
+    assert result.is_relevant
+
+
+def test_a_value_stating_chunk_is_always_returned() -> None:
+    """The gate judges what retrieval returns, so ranking must not decide it.
+
+    Semantic ranking once pushed the only chunk stating an application fee out
+    of the top four, and the field flipped to NOT_FOUND with no lexical fact
+    having changed. One chunk that both mentions the field and states a value
+    of its kind is now guaranteed a place.
+    """
+    noise = [make_chunk(index, f"{NOISE_TEXT} {index}") for index in range(6)]
+    stating = make_chunk(99, STATED_FEE)
+    retriever = Retriever([*noise, stating])
+    result = retriever.search_field(get_field("service_fee"), k=2)
+    assert any(chunk.chunk.chunk_id == "c099" for chunk in result.primary)
+    assert result.is_relevant

@@ -11,7 +11,10 @@ BM25 misses paraphrase, embeddings miss exact identifiers like «TC 01-03#6».
 **The relevance gate is lexical, and deliberately so.** A retriever always
 returns its nearest neighbour, so for a field the bank does not offer it returns
 *something*, and an extractor will dutifully quote it. The gate therefore asks
-whether a field's *identifying* term actually occurs in the retrieved evidence.
+two things of the retrieved evidence: that a field's *identifying* term occurs
+in it, and that the same chunk contains a value of the field's declared kind.
+Requiring only the term was not enough - the consumer page discusses service
+fees in a disclaimer that states no fee, and a term-only gate passed on it.
 
 Similarity was measured as an alternative and rejected on the evidence. Over the
 consumer-loan page, the maximum cosine for «հայտի ուսումնասիրության վճար» - a
@@ -349,6 +352,22 @@ class Retriever:
         fused = reciprocal_rank_fusion(rankings, weights=weights)
         ordered = sorted(fused.items(), key=lambda pair: pair[1], reverse=True)[:k]
 
+        # The gate judges what retrieval returns, so ranking noise could decide
+        # whether a field is answerable: adding semantic ranking pushed the one
+        # chunk carrying an application fee out of the top four, and the field
+        # flipped to NOT_FOUND without any lexical fact changing. If the corpus
+        # holds a chunk that both mentions the field and states a value of its
+        # kind, one such chunk is always returned.
+        if shaped and not any(local in {index for index, _ in ordered} for local in shaped[:1]):
+            already = {index for index, _ in ordered}
+            guaranteed = next((local for local in shaped if local not in already), None)
+            if guaranteed is not None:
+                ordered = [*ordered[: max(0, k - 1)], (guaranteed, fused.get(guaranteed, 0.0))]
+                logger.info(
+                    "lexical_hit_guaranteed",
+                    extra={"field": spec.id, "role": role.value, "chunk_index": guaranteed},
+                )
+
         results: list[ScoredChunk] = []
         for local_index, score in ordered:
             chunk = self._chunks[indices[local_index]]
@@ -411,9 +430,27 @@ class Retriever:
                 f"no chunk mentions {spec.id} at all; reporting NOT_FOUND rather "
                 "than offering the nearest unrelated passage"
             )
-        with_term = next((chunk for chunk in retrieved if chunk.has_term), None)
-        if with_term is not None:
-            return True, f"a query term for {spec.id} occurs in {with_term.chunk.chunk_id}"
+        # A mention is not a statement. The consumer page contains «ՎԱՐԿԻ
+        # ՏՐԱՄԱԴՐՄԱՆ և ՍՊԱՍԱՐԿՄԱՆ ԳԾՈՎ ԲՈԼՈՐ ՊԱՐՏԱԴԻՐ ՎՃԱՐՆԵՐԸ» - a disclaimer
+        # *about* service fees that states no fee. Passing the gate on that would
+        # send the extractor to a passage with nothing to extract, so the field
+        # must be mentioned **and** a value of its kind must be present in the
+        # same chunk.
+        stating = next(
+            (chunk for chunk in retrieved if chunk.has_term and chunk.has_value), None
+        )
+        if stating is not None:
+            return True, (
+                f"{stating.chunk.chunk_id} mentions {spec.id} and contains a value "
+                f"of kind {spec.kind.value}"
+            )
+        mentioned = next((chunk for chunk in retrieved if chunk.has_term), None)
+        if mentioned is not None:
+            return False, (
+                f"{spec.id} is mentioned in {mentioned.chunk.chunk_id} but no retrieved "
+                f"chunk states a {spec.kind.value} value; reporting NOT_FOUND rather than "
+                "extracting from a passage that only refers to the field"
+            )
         return False, (
             f"no identifying term for {spec.id} occurs in the retrieved evidence; "
             "reporting NOT_FOUND rather than quoting the nearest paragraph"
