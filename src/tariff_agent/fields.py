@@ -169,9 +169,15 @@ TARIFF_FIELDS: Final[tuple[FieldSpec, ...]] = (
         label_en="Salary customer privileges",
         kind=ValueKind.TEXT,
         required=False,
+        # Corrected against the documents: ACBA writes «աշխատավարձը Բանկի
+        # միջոցով ստանալու դեպքում ... արտոնյալ տոկոսադրույք», not the phrasing
+        # the field name suggests. Query terms written from a field's title
+        # rather than from the corpus are the commonest cause of a field being
+        # reported NOT_FOUND while its answer sits in the evidence.
         query_terms=(
-            "աշխատավարձային նախագիծ արտոնություն",
-            "աշխատավարձը բանկի միջոցով ստացող հաճախորդ",
+            "աշխատավարձը բանկի միջոցով",
+            "արտոնյալ պայման աշխատավարձային հաճախորդ",
+            "աշխատավարձային նախագիծ",
             "salary client privileges",
         ),
     ),

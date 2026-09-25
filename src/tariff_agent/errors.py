@@ -127,6 +127,22 @@ class ValidationFailedError(TariffAgentError):
     """Deterministic validation rejected the extraction."""
 
 
+class EmbeddingError(TariffAgentError):
+    """Chunks or a query could not be embedded.
+
+    Callers degrade to lexical retrieval and mark the result, rather than
+    failing a run that BM25 can still answer.
+    """
+
+
+class KnowledgeIndexError(TariffAgentError):
+    """A knowledge index could not be built, read or written.
+
+    Named rather than reusing ``IndexError``, which is a builtin meaning
+    something entirely different.
+    """
+
+
 class SnapshotError(TariffAgentError):
     """A tariff snapshot could not be stored or read."""
 

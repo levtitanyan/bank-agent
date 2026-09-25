@@ -746,6 +746,139 @@ covered by the committed scanned sample under `data/samples/ocr/`, which the OCR
 with the actual Tesseract binary and skips when it is absent.
 
 
+# Phase 5 — Retrieval
+
+*Which passages state a tariff field, and whether any of them really do.*
+
+### P5-D1 · Armenian morphology is handled, because nothing else matters as much
+**Requirement:** 5.5 · **File:** [`rag/text.py`](../src/tariff_agent/rag/text.py)
+
+«տոկոսադրույք» appears in the corpus as five inflected forms. Exact-token matching finds
+whichever the document happened to use and misses the rest. A light suffix stripper with a
+minimum stem length collapses all five, and it is the single largest accuracy contributor in
+this phase. **Limitation, stated because it is real:** it does not model vowel alternation, so
+«ամփոփագիր» and its genitive «ամփոփագրի» do not meet, and nominalisation variants
+(«ուսումնասիրության» vs «ուսումնասիրման») stem apart.
+
+### P5-D2 · «և» is folded to «ն» for matching only
+**Requirement:** 5.4 · 5.5
+
+Tesseract reads «և» as «ն», so the OCR'd summary says «Տնողություն» where the document says
+«Տևողություն». Folding one direction lets them meet. The collision risk was **measured, not
+assumed**: across 26,054 tokens and 1,591 distinct folded forms in the indexed corpus, **no
+folded form collides with a different real word**. Stored text is never rewritten (P4-D7).
+
+### P5-D3 · A chunk never spans a page, and carries exact offsets
+**Requirement:** 5.5 · 5.7 · **File:** [`rag/chunking.py`](../src/tariff_agent/rag/chunking.py)
+
+Evidence cites one page. `char_start`/`char_end` index into `Page.text`, so Phase 6 can locate
+a quote, confirm it occurs, and resolve its section. Splits never fall inside a number: a
+«1,000,000» cut in half becomes two wrong values.
+
+### P5-D4 · A table's heading goes **inside** the chunk text
+**Requirement:** 5.5
+
+«0.5% | ամսական» is meaningless; under «Սպասարկման վճար» it is a service fee. The model sees
+chunk text, not metadata, so the title has to be in the text. A table split for length repeats
+its header row on every piece.
+
+### P5-D5 · Rank fusion, weighted by how canonical each signal is
+**Requirement:** 5.5 · **File:** [`rag/retrieval.py`](../src/tariff_agent/rag/retrieval.py)
+
+BM25 scores and cosines are not commensurable, so they are fused by **rank** (RRF). Two
+refinements came from measurement:
+
+* **Per-phrasing weights.** Query terms are ordered canonical-first, and treating them equally
+  let a chunk that ranked first for a *secondary* phrasing beat one that ranked first for the
+  field's own name — «ամսական վճարումների» outranking the service-fee table.
+* **A value-shape ranking.** BM25 answers "does this passage discuss rates?"; on the real
+  consumer page four chunks do, and it ranked a *marketing banner* above the rate table. Every
+  field declares a `ValueKind`, so a third ranking promotes chunks that mention the field **and**
+  contain a value of that kind, tables first.
+
+### P5-D6 · The relevance gate is lexical. Similarity was measured and rejected
+**Requirement:** 5.5 · 5.6 · 5.11 irrelevant retrieval
+
+| field on the consumer page | max cosine | actually stated? |
+|---|---|---|
+| `application_fee` | **0.687** | **no** |
+| `collateral` | 0.687 | yes |
+| `currency` | 0.682 | yes |
+
+Gemini's similarities for this corpus sit in a 0.63–0.81 band regardless of relevance: the
+absent field outscored two present ones, and **no floor separates them**. So embeddings rank,
+and only a lexical hit decides that an answer exists. Without this, the consumer product would
+be reported as charging an application fee its documents never mention.
+
+### P5-D7 · The gate requires the *identifying* token, not just coverage
+**Requirement:** 5.6 · 5.8
+
+«հայտի ուսումնասիրության վճար» shares «հայտ» and «վճար» with half a tariff document, so a
+two-of-three match accepted any fee paragraph. The term's rarest token — the one that actually
+identifies the field — must be present. Coverage alone is still required too, at 60%, because
+documents paraphrase: the text says «ստանալու» where the query says «ստացող».
+
+### P5-D8 · Query terms are corrected against the corpus, not the field name
+**Requirement:** 5.5
+
+`salary_privileges` was written from the assignment's field title and matched nothing; ACBA
+writes «աշխատավարձը Բանկի միջոցով ստանալու դեպքում … արտոնյալ տոկոսադրույք». Query terms
+written from a field's title rather than from the documents are the commonest cause of a field
+being reported NOT_FOUND while its answer sits in the evidence.
+
+### P5-D9 · No offline stand-in embedder
+**Requirement:** 5.5 · 5.14
+
+A hashed-n-gram model would have made the demos look complete while measuring nothing real, and
+its numbers would not predict the configured system's behaviour. Without a key — or when the
+API fails — retrieval runs on BM25 and **says so** (`degraded=True`). The tests use a fake
+embedder with fixed vectors where the fusion logic itself is under test.
+
+### P5-D10 · Primary and supporting sources are searched separately
+**Requirement:** 5.5 · 5.10
+
+The bank's own documents disagree: the 2023 mortgage summary states 11.9–12.5% where the
+current product page says 13.75–14.5%. Merging the two would average over a real conflict.
+Kept apart, Phase 6 can see it and raise the `conflict` status defined in Phase 1.5.
+
+### P5-D11 · The index is keyed by content hash, embedder and format version
+**Requirement:** 5.5 · **File:** [`rag/index.py`](../src/tariff_agent/rag/index.py)
+
+An unchanged document is never re-embedded; a change of model or of chunk format invalidates
+what depended on it. Stored as JSON metadata plus base64 float32 (a plain float list is ~5×
+larger). A corrupt or mismatched index rebuilds rather than being trusted.
+
+### P5-D12 · Embedding failure degrades per document, not per product
+**Requirement:** 5.11
+
+A rate limit killed one document's embeddings during measurement, and an all-or-nothing rule
+dropped semantic ranking for the whole product. Now that document's chunks compete lexically
+while the rest keep their vectors. The retry budget was also widened: embedding APIs are
+quota-limited rather than flaky, and a sub-second retry just spends the next attempt against
+the same limit.
+
+### P5-D13 · No vector database
+**Requirement:** 5.5 trade-offs
+
+200–400 chunks per product. Cosine is one small NumPy matmul; BM25 is microseconds. Chroma,
+FAISS or pgvector would add a dependency or a service without changing a number. **This
+inverts above roughly 100k chunks**, which is why the index interface is four functions.
+
+### P5-D14 · Measured both ways, and the result is not the expected one
+**Requirement:** 5.5 · 5.14
+
+| | gate | recall@4 | top-1 |
+|---|---|---|---|
+| BM25 only | **19/20** | 18/20 | **14/20** |
+| Gemini + BM25 | 18/20 | **19/20** | 12/20 |
+
+Semantic ranking buys one field of recall and costs one field of gate accuracy and two of
+top-1, for an API dependency and a per-run cost. On *this* corpus, with query terms written in
+the bank's own vocabulary, lexical retrieval is at least as good. The hybrid remains the
+default when a key is configured, as specified — but the measurement is reported rather than
+assumed, and a bank whose documents paraphrase more would likely invert it.
+
+
 # Tooling decisions
 
 ### T-D1 · mypy strict on `src` only
@@ -782,7 +915,9 @@ review instead:
 | Cache is unbounded | No size limit, TTL or eviction, and writes are not atomic. A crash mid-write orphans a body file, which the next read treats as absent |
 | `Crawl-delay` is not read | Pacing is a fixed configured interval (P2-D22); robots.txt may ask for more |
 | Identical edge content looks like furniture | Content repeated at the top or bottom of every page is removed (P4-D8) |
-| Tesseract reads «և» as «ն» | Values are unaffected; term matching suffers until Phase 5 folds the spellings (P4-D7) |
+| Tesseract reads «և» as «ն» | Folded for matching in Phase 5; measured to cause no collisions in this corpus (P5-D2) |
+| Stemming misses vowel alternation | «ամփոփագիր» and «ամփոփագրի» do not meet, nor «ուսումնասիրության» and «ուսումնասիրման» (P5-D1) |
+| Retrieval weights are hand-set | TERM_WEIGHTS and SHAPE_WEIGHT were tuned against two products; the Phase 9 evaluation set should measure them (P5-D5) |
 | JS-rendered links are invisible | ACBA is server-rendered enough today; a redesign would break discovery silently |
 | Product granularity | `consumer_loan` now means one purchasable product, not the family. Monitoring the others would mean more entries in `products.yaml`, not new code (P3-D20) |
 
@@ -805,5 +940,5 @@ review instead:
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 223 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 265 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |

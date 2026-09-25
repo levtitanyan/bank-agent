@@ -77,7 +77,7 @@ ignore_missing_imports = true
 # in documents/pdf.py and documents/ocr.py, which expose typed functions, so the
 # untypedness stops at that boundary rather than spreading.
 [[tool.mypy.overrides]]
-module = ["pytesseract.*", "PIL.*"]
+module = ["pytesseract.*", "PIL.*", "rank_bm25.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

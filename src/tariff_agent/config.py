@@ -142,6 +142,34 @@ class DocumentSettings(BaseModel):
     table_min_filled: float = Field(default=0.5, ge=0, le=1)
 
 
+class RagSettings(BaseModel):
+    """How documents are chunked, indexed and searched.
+
+    Attributes:
+        chunk_chars: Target chunk size. Large enough to hold a tariff statement
+            with its label, small enough that a quote is easy to verify.
+        chunk_overlap: Characters repeated between consecutive chunks, so a
+            value split at a boundary survives whole in one of them.
+        top_k: Chunks kept per source role per field. The extraction step sees
+            all of them, which is why recall at this k matters more than the
+            rank of any single chunk.
+        embedding_model: Gemini embedding model, when a key is configured.
+        similarity_floor: Recorded on results for debugging. It deliberately
+            does **not** gate relevance: measured on the real corpus, an absent
+            field scored a higher cosine than fields the page states.
+        index_dir: Where per-document indexes are cached.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    chunk_chars: int = Field(default=1200, ge=200, le=4000)
+    chunk_overlap: int = Field(default=150, ge=0, le=1000)
+    top_k: int = Field(default=4, ge=1, le=20)
+    embedding_model: str = "gemini-embedding-001"
+    similarity_floor: float = Field(default=0.55, ge=0, le=1)
+    index_dir: Path = PROJECT_ROOT / "data" / "index"
+
+
 class Settings(BaseSettings):
     """Environment-provided settings.
 
@@ -160,6 +188,8 @@ class Settings(BaseSettings):
             ``TARIFF_HTTP__`` prefix (see :class:`HttpSettings`).
         documents: Parsing, OCR and quality settings, overridable with the
             ``TARIFF_DOCUMENTS__`` prefix (see :class:`DocumentSettings`).
+        rag: Chunking and retrieval settings, overridable with the
+            ``TARIFF_RAG__`` prefix (see :class:`RagSettings`).
         use_vertexai: Whether the google-genai SDK should talk to Vertex AI
             instead of AI Studio (env ``GOOGLE_GENAI_USE_VERTEXAI``). False here:
             this project authenticates with an AI Studio key. Declared so the
@@ -182,6 +212,7 @@ class Settings(BaseSettings):
     use_vertexai: bool = Field(default=False, alias="GOOGLE_GENAI_USE_VERTEXAI")
     http: HttpSettings = Field(default_factory=HttpSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
+    rag: RagSettings = Field(default_factory=RagSettings)
 
     @property
     def has_api_key(self) -> bool:

@@ -28,6 +28,7 @@ from tariff_agent.documents.document import (
 from tariff_agent.documents.html import extract_html
 from tariff_agent.documents.ocr import ocr_page
 from tariff_agent.documents.pdf import open_pdf, page_candidates
+from tariff_agent.documents.sections import detect_sections
 from tariff_agent.documents.strategies import choose_best_text, make_candidate
 from tariff_agent.errors import DocumentError, PdfParseError
 from tariff_agent.http.client import ContentKind, FetchResult
@@ -210,13 +211,19 @@ def _process_pdf(
         )
         for page, text in zip(raw_pages, cleaned, strict=True)
     ]
+    # Headings come from the shape of the text, not from font metadata: the
+    # summary's structured extraction is unusable and OCR has no fonts at all.
+    # Without this, every PDF's evidence carried an empty section.
+    sections = [
+        section for page in pages for section in detect_sections(page.text, page.number)
+    ]
     return _assemble(
         fetch=fetch,
         name=name,
         kind=DocumentKind.PDF,
         language=language,
         pages=pages,
-        sections=[],
+        sections=sections,
         settings=settings,
     )
 
