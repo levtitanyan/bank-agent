@@ -241,6 +241,9 @@ class TariffExtraction(BaseModel):
         extraction_method: What produced these values - ``"gemini:<model>"`` or
             ``"rule_based"`` for the offline extractor. Stamped on the report
             too, so a demo run can never be mistaken for a model extraction.
+        prompt_version: Which set of instructions produced them. A reworded
+            prompt can change what the model reports, and a diff across two
+            versions is measuring our change, not the bank's.
         fields: Every registry field id mapped to its value. Always complete.
     """
 
@@ -256,6 +259,7 @@ class TariffExtraction(BaseModel):
     document_date: date | None = None
     document_edition: str | None = None
     extraction_method: str = "unknown"
+    prompt_version: int = 0
     fields: dict[str, FieldValue]
 
     @model_validator(mode="after")

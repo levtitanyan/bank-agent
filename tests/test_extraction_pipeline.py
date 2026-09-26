@@ -86,16 +86,20 @@ class ScriptedExtractor:
         self._fail_when_more_than = fail_when_more_than
         self.calls = 0
         self.requested: list[list[str]] = []
+        self.products: list[str | None] = []
 
     @property
     def method(self) -> str:
         """Identifier recorded on the extraction."""
         return "scripted"
 
-    def extract(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
         """Return the scripted answers for the requested fields."""
         self.calls += 1
         self.requested.append([spec.id for spec in specs])
+        self.products.append(product)
         if self._fail_when_more_than is not None and len(specs) > self._fail_when_more_than:
             raise ExtractionError("the scripted backend refuses groups this large")
         return ExtractionResponse(

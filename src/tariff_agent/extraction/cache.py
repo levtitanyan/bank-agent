@@ -83,12 +83,15 @@ class CachedExtractor:
         """Whether every answer in this run came from disk."""
         return self.cache_hits > 0 and self.cache_misses == 0
 
-    def extract(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
         """Return a stored answer, or ask the backend and store its answer.
 
         Args:
             specs: The fields to extract.
             chunks: The passages retrieved for them.
+            product: The product being monitored, passed through to the backend.
 
         Returns:
             The answer. A cached answer is identical to the one the backend
@@ -96,7 +99,7 @@ class CachedExtractor:
         """
         if not self._enabled:
             self.cache_misses += 1
-            return self._ask(specs, chunks)
+            return self._ask(specs, chunks, product)
 
         key = cache_key(specs, chunks, self.method)
         path = self._directory / f"{key}.json"
@@ -110,16 +113,19 @@ class CachedExtractor:
             return stored
 
         self.cache_misses += 1
-        response = self._ask(specs, chunks)
+        response = self._ask(specs, chunks, product)
         self._write(path, response, specs)
         return response
 
-    def _ask(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def _ask(
+        self, specs: list[FieldSpec], chunks: list[Chunk], product: str | None
+    ) -> ExtractionResponse:
         """Call the wrapped backend.
 
         Args:
             specs: The fields to extract.
             chunks: The passages.
+            product: The product being monitored.
 
         Returns:
             The backend's answer.

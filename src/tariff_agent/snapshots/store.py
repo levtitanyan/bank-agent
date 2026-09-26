@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     document_edition  TEXT,
     schema_version    INTEGER NOT NULL,
     extraction_method TEXT    NOT NULL,
+    prompt_version    INTEGER NOT NULL DEFAULT 0,
     status            TEXT    NOT NULL,
     payload           TEXT    NOT NULL
 );
@@ -180,8 +181,8 @@ class SnapshotStore:
                     INSERT INTO snapshots (
                         bank, product_id, run_id, taken_at, source_url, doc_id,
                         document_date, document_edition, schema_version,
-                        extraction_method, status, payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        extraction_method, prompt_version, status, payload
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         extraction.bank,
@@ -194,6 +195,7 @@ class SnapshotStore:
                         extraction.document_edition,
                         extraction.schema_version,
                         extraction.extraction_method,
+                        extraction.prompt_version,
                         status.value,
                         payload,
                     ),

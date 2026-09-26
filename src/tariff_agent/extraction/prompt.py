@@ -17,9 +17,18 @@ from __future__ import annotations
 from tariff_agent.fields import FieldSpec
 from tariff_agent.rag.chunking import Chunk
 
-PROMPT_VERSION = 2
+PROMPT_VERSION = 4
 """Bumped whenever the instructions change.
 
+Version 4 narrows version 3's shared-document rule. Telling the model to answer
+NOT_FOUND whenever it could not attribute a value to a product made it cautious
+about the product's *own* page too: the consumer loan's currency, stated plainly
+as «Արժույթ ՀՀ դրամ», came back missing. The rule now addresses the case it was
+written for - a passage listing several products - and says explicitly that a
+value stated for the named product counts wherever it appears.
+
+Version 3 named the product being extracted, because a supporting document can
+cover every loan the bank sells and its scope leaked into one product's answer.
 Version 2 added the rule that an explicitly stated absence of a charge is a
 value of zero rather than a missing field. Four of six NOT_FOUND results were
 passages saying «միջնորդավճար չի գանձվում» - the bank stating it charges
@@ -52,7 +61,14 @@ Rules:
    correct the quote.
 6. Report the value as the document writes it, including its units and currency
    («20.1-21.6%», «50,000-10,000,000 ՀՀ դրամ», «9-60 ամիս»).
-7. If the document states several values for one field - for example a different
+7. Some passages come from a shared document that lists MANY of the bank's
+   products - a tariff book or price list. Where a passage gives values for
+   several products, take the row or section belonging to the product named
+   above and ignore the others. Never merge values from different products'
+   rows into one answer. A value stated for the named product is valid wherever
+   it appears, including in a shared document - most of this product's fees are
+   published there.
+8. If the document states several values for one field - for example a different
    rate in the mobile app, at a branch, or for salary customers - set `value` to
    the full stated range and list each one under `variants` with its own label,
    value and quote. Do not choose one on the bank's behalf.
@@ -77,12 +93,19 @@ def format_chunk(chunk: Chunk) -> str:
     return f"[{chunk.chunk_id}] ({kind}; {' → '.join(location)})\n{chunk.text}"
 
 
-def build_prompt(specs: list[FieldSpec], chunks: list[Chunk]) -> str:
+def build_prompt(
+    specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+) -> str:
     """Build the prompt for one group of fields.
 
     Args:
         specs: The fields being extracted in this call.
         chunks: The passages retrieved for those fields, de-duplicated.
+        product: The product being monitored, named so the model can tell a
+            shared document's scope from this product's. Asked for the consumer
+            loan's currency without it, one model answered «ՀՀ դրամ, ԱՄՆ դոլար,
+            եվրո, ՌԴ ռուբլի» - four currencies, all real, none this loan's, all
+            of them the tariff book's.
 
     Returns:
         The full prompt.
@@ -92,8 +115,10 @@ def build_prompt(specs: list[FieldSpec], chunks: list[Chunk]) -> str:
         for spec in specs
     )
     passages = "\n\n".join(format_chunk(chunk) for chunk in chunks)
+    heading = f"Product: {product}\n\n" if product else ""
     return (
         f"{INSTRUCTIONS}\n"
+        f"{heading}"
         f"Fields to extract:\n{wanted}\n\n"
         f"Passages:\n\n{passages}\n\n"
         f"Answer with one entry per requested field."

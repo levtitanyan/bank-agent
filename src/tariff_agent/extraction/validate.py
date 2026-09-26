@@ -134,6 +134,7 @@ def _check_field(field_id: str, value: FieldValue, allowlist: Allowlist) -> list
     """
     problems: list[str] = []
     spec = FIELDS_BY_ID[field_id]
+    problems.extend(_check_variants(value, spec.kind))
 
     if value.evidence is not None:
         host = urlsplit(str(value.evidence.source_url)).hostname or ""
@@ -156,6 +157,47 @@ def _check_field(field_id: str, value: FieldValue, allowlist: Allowlist) -> list
         problems.extend(
             _check_range(normalized, "min_months", "max_months", 0.0, MAX_TERM_MONTHS, "term")
         )
+    return problems
+
+
+def _check_variants(value: FieldValue, kind: ValueKind) -> list[str]:
+    """Check that per-channel values are consistent with the headline value.
+
+    A field carries the full stated range plus a breakdown by channel, so every
+    variant should fall inside that range. One that does not means either the
+    range or the variant was misread - and a report showing «17.5-21.6%» with a
+    branch variant of «35%» is not something a reviewer should have to notice.
+
+    Args:
+        value: The field value, with its variants.
+        kind: The field's value kind.
+
+    Returns:
+        The problems found. Non-numeric fields are skipped: a prose variant has
+        no range to sit inside.
+    """
+    if not value.variants or value.normalized is None:
+        return []
+    if kind not in (ValueKind.PERCENT, ValueKind.AMOUNT, ValueKind.FEE):
+        return []
+    low, high = value.normalized.get("min"), value.normalized.get("max")
+    if not isinstance(low, int | float) or not isinstance(high, int | float):
+        return []
+
+    problems: list[str] = []
+    for variant in value.variants:
+        if variant.normalized is None:
+            continue
+        variant_low = variant.normalized.get("min")
+        variant_high = variant.normalized.get("max")
+        if not isinstance(variant_low, int | float) or not isinstance(variant_high, int | float):
+            continue
+        # A tolerance, because a bank rounds its headline range.
+        if variant_high < low - 0.01 or variant_low > high + 0.01:
+            problems.append(
+                f"the variant {variant.label!r} states {variant.value!r}, which falls outside "
+                f"the range this field reports ({low}-{high})"
+            )
     return problems
 
 

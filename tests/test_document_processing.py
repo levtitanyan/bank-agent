@@ -430,3 +430,64 @@ def test_a_bullet_item_is_not_a_section_heading() -> None:
         "Անվանական տոկոսադրույքը կազմում է տասներեք և կես տոկոս տարեկան"
     )
     assert [section.title for section in detect_sections(page, 1)] == ["Տոկոսադրույք"]
+
+
+def test_ocr_must_win_by_a_margin_not_by_a_hair() -> None:
+    """A marginally better OCR reading is not worth its known corruptions.
+
+    On page 2 of the real tariff book OCR scored 1.00 against the parser's 0.92
+    and won - and turned «չի գանձվում» ("is not charged") into «sh գանձվում»,
+    losing the negation that made a fee zero. The quality score cannot see that:
+    it measures whether text reads like text, not whether it says what the page
+    says.
+    """
+    from tariff_agent.documents.strategies import OCR_MARGIN
+
+    parsed = candidate(ExtractionMethod.PDF_TEXT, GOOD_TEXT)
+    slightly_better = GOOD_TEXT + "\nԼրացուցիչ տող որը մի փոքր բարելավում է գնահատականը։"
+    ocr = candidate(ExtractionMethod.OCR, slightly_better, confidence=93.0)
+    assert ocr.quality.score - parsed.quality.score < OCR_MARGIN
+
+    best = choose_best_text([parsed, ocr], SETTINGS)
+    assert best is not None
+    assert best.method is ExtractionMethod.PDF_TEXT
+
+
+def test_ocr_still_wins_when_the_parse_is_genuinely_broken() -> None:
+    """The mortgage summary is why OCR exists here; the margin must not lose it."""
+    from tariff_agent.documents.strategies import OCR_MARGIN
+
+    broken = candidate(ExtractionMethod.PDF_TEXT, BROKEN_TEXT)
+    ocr = candidate(ExtractionMethod.OCR, GOOD_TEXT, confidence=92.0)
+    assert ocr.quality.score - broken.quality.score >= OCR_MARGIN
+
+    best = choose_best_text([broken, ocr], SETTINGS)
+    assert best is not None
+    assert best.method is ExtractionMethod.OCR
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract is not installed")
+def test_a_page_with_no_text_layer_still_chooses_ocr() -> None:
+    """The margin must not cost us the documents OCR exists for.
+
+    The sample is a real ACBA page rendered to an image: the parser finds
+    nothing at all, so OCR clears any margin and must win.
+    """
+    sample = OCR_SAMPLE / "acba_mortgage_summary_page1_scanned.pdf"
+    document = process_document(fetch_of(sample), SETTINGS)
+    assert document.methods == (ExtractionMethod.OCR,)
+    assert "ամփոփագիր" in document.text
+
+
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract is not installed")
+def test_a_page_that_parses_cleanly_keeps_the_parsed_text() -> None:
+    """And it must stop OCR displacing a working parse.
+
+    On page 2 of the real tariff book OCR scored 1.00 against the parser's 0.92,
+    won, and turned «չի գանձվում» into «sh գանձվում» - losing the negation that
+    made a fee zero. This fixture parses cleanly, so the parse must be kept even
+    though OCR would also read it.
+    """
+    document = process_document(fetch_of(FIXTURES / "synthetic_furniture.pdf"), SETTINGS)
+    assert ExtractionMethod.OCR not in document.methods
+    assert "Անվանական տոկոսադրույքը" in document.text

@@ -29,6 +29,7 @@ from tariff_agent.extraction.conflict import FieldConflict, detect_conflict
 from tariff_agent.extraction.extractor import Extractor
 from tariff_agent.extraction.groups import FIELD_GROUPS
 from tariff_agent.extraction.normalize import normalize
+from tariff_agent.extraction.prompt import PROMPT_VERSION
 from tariff_agent.extraction.schema import ExtractedField
 from tariff_agent.extraction.validate import ValidationReport, validate_extraction
 from tariff_agent.extraction.verify import verify_quote
@@ -121,7 +122,7 @@ def extract_tariffs(
         chunks = _passages_for(answerable, retrieval)
         attempted += 1
         try:
-            response = extractor.extract(answerable, chunks)
+            response = extractor.extract(answerable, chunks, product=product.name_hy)
         except ExtractionError as exc:
             failures += 1
             logger.warning(
@@ -131,7 +132,11 @@ def extract_tariffs(
             )
             for spec in answerable:
                 fields[spec.id] = _retry_single(
-                    spec, retrieval, extractor, reason="the group call failed"
+                    spec,
+                    retrieval,
+                    extractor,
+                    reason="the group call failed",
+                    product_name=product.name_hy,
                 )
             continue
 
@@ -153,6 +158,7 @@ def extract_tariffs(
                     retrieval,
                     extractor,
                     reason="the answer's quote could not be verified",
+                    product_name=product.name_hy,
                 )
                 if retried.status is not FieldStatus.NOT_FOUND:
                     value = retried
@@ -180,6 +186,7 @@ def extract_tariffs(
         ),
         retrieved_at=primary_source.retrieved_at if primary_source else datetime.now(UTC),
         extraction_method=extractor.method,
+        prompt_version=PROMPT_VERSION,
         fields=fields,
     )
     validated, report = validate_extraction(extraction, allowlist)
@@ -238,7 +245,7 @@ def _build_field(
         return FieldValue.not_found()
 
     evidence = _evidence_from(check.chunk, answer.quote)
-    variants = _build_variants(answer, chunks)
+    variants = _build_variants(answer, chunks, spec.kind)
     return FieldValue(
         value=answer.value.strip(),
         normalized=normalize(answer.value, spec.kind),
@@ -248,12 +255,16 @@ def _build_field(
     )
 
 
-def _build_variants(answer: ExtractedField, chunks: list[Chunk]) -> tuple[FieldVariant, ...]:
+def _build_variants(
+    answer: ExtractedField, chunks: list[Chunk], kind: ValueKind
+) -> tuple[FieldVariant, ...]:
     """Verify and build each per-channel variant.
 
     Args:
         answer: The model's answer.
         chunks: Passages retrieved for this field.
+        kind: The field's value kind, so each variant is normalized and can be
+            checked against the headline range.
 
     Returns:
         The variants whose quotes verified. An unverifiable variant is dropped
@@ -269,6 +280,7 @@ def _build_variants(answer: ExtractedField, chunks: list[Chunk]) -> tuple[FieldV
             FieldVariant(
                 label=item.label.strip(),
                 value=item.value.strip(),
+                normalized=normalize(item.value, kind),
                 evidence=_evidence_from(check.chunk, item.quote),
             )
         )
@@ -301,6 +313,7 @@ def _retry_single(
     extractor: Extractor,
     *,
     reason: str,
+    product_name: str | None = None,
 ) -> FieldValue:
     """Re-ask for one field on its own.
 
@@ -310,13 +323,16 @@ def _retry_single(
         extractor: The backend.
         reason: Why the retry is happening, logged so that a run making more
             calls than the group count can be explained rather than guessed at.
+        product_name: The product being monitored.
 
     Returns:
         The field value, NOT_FOUND when the retry also fails.
     """
     logger.info("field_retried_alone", extra={"field": spec.id, "reason": reason})
     try:
-        response = extractor.extract([spec], _passages_for([spec], retrieval))
+        response = extractor.extract(
+            [spec], _passages_for([spec], retrieval), product=product_name
+        )
     except ExtractionError:
         logger.warning("single_field_retry_failed", extra={"field": spec.id})
         return FieldValue.not_found()
@@ -378,7 +394,7 @@ def _find_conflicts(
         specs = [FIELDS_BY_ID[field_id] for field_id in checkable]
         supporting = _supporting_passages(checkable, retrieval)
         try:
-            response = extractor.extract(specs, supporting)
+            response = extractor.extract(specs, supporting, product=extraction.product_id)
         except ExtractionError:
             logger.warning("conflict_check_failed", extra={"fields": checkable})
             continue

@@ -142,6 +142,60 @@ class DocumentSettings(BaseModel):
     table_min_filled: float = Field(default=0.5, ge=0, le=1)
 
 
+class MonitoringThresholds(BaseModel):
+    """When a change is large enough to need confirming.
+
+    Attributes:
+        large_rate_points: Percentage points beyond which a rate move is large.
+        large_amount_percent: Relative percent beyond which an amount move is large.
+        large_term_months: Months beyond which a term move is large.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    large_rate_points: float = Field(default=2.0, gt=0)
+    large_amount_percent: float = Field(default=25.0, gt=0)
+    large_term_months: float = Field(default=12.0, gt=0)
+
+
+class ReviewPolicy(BaseModel):
+    """Which conditions stop for a human.
+
+    Each is something the system can detect but cannot responsibly settle on its
+    own. They are switches rather than code so that a demonstration can turn one
+    on deliberately.
+
+    Attributes:
+        on_large_change: A big move in a published tariff.
+        on_source_conflict: Two official sources stating different values.
+        on_rival_documents: Two plausible official documents for one product.
+        on_low_quality: A document too poorly read to trust.
+        on_ambiguous_product: A query fitting more than one monitored product.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    on_large_change: bool = True
+    on_source_conflict: bool = True
+    on_rival_documents: bool = True
+    on_low_quality: bool = True
+    on_ambiguous_product: bool = True
+
+
+class MonitoringConfig(BaseModel):
+    """Change-detection and review policy.
+
+    Attributes:
+        thresholds: When a change counts as large.
+        review: Which conditions stop for a human.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    thresholds: MonitoringThresholds = Field(default_factory=MonitoringThresholds)
+    review: ReviewPolicy = Field(default_factory=ReviewPolicy)
+
+
 class RagSettings(BaseModel):
     """How documents are chunked, indexed and searched.
 
@@ -196,6 +250,7 @@ class Settings(BaseSettings):
             ``TARIFF_DOCUMENTS__`` prefix (see :class:`DocumentSettings`).
         rag: Chunking and retrieval settings, overridable with the
             ``TARIFF_RAG__`` prefix (see :class:`RagSettings`).
+        snapshots_db: Where the monitoring history is kept.
         use_vertexai: Whether the google-genai SDK should talk to Vertex AI
             instead of AI Studio (env ``GOOGLE_GENAI_USE_VERTEXAI``). False here:
             this project authenticates with an AI Studio key. Declared so the
@@ -219,6 +274,7 @@ class Settings(BaseSettings):
     http: HttpSettings = Field(default_factory=HttpSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
     rag: RagSettings = Field(default_factory=RagSettings)
+    snapshots_db: Path = PROJECT_ROOT / "data" / "snapshots.db"
 
     @property
     def has_api_key(self) -> bool:
@@ -481,6 +537,25 @@ def load_products(path: Path | None = None) -> ProductCatalog:
     if len(set(ids)) != len(ids):
         raise ConfigError(f"duplicate product ids in {path}: {ids}")
     return catalog
+
+
+def load_monitoring_config(path: Path | None = None) -> MonitoringConfig:
+    """Load the change-detection and review policy.
+
+    Args:
+        path: Override for the YAML location; defaults to ``config/monitoring.yaml``.
+
+    Returns:
+        The parsed :class:`MonitoringConfig`.
+
+    Raises:
+        ConfigError: If the file is missing or does not match the schema.
+    """
+    path = path or CONFIG_DIR / "monitoring.yaml"
+    try:
+        return MonitoringConfig.model_validate(_read_yaml(path))
+    except ValidationError as exc:
+        raise ConfigError(f"invalid monitoring configuration in {path}: {exc}") from exc
 
 
 def load_discovery_config(path: Path | None = None) -> DiscoveryConfig:

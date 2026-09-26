@@ -47,7 +47,9 @@ class Extractor(Protocol):
         """Identifier recorded on the extraction and shown in the report."""
         ...
 
-    def extract(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
         """Read the requested fields out of the passages."""
         ...
 
@@ -77,12 +79,16 @@ class GeminiExtractor:
         """Identifier recorded on the extraction."""
         return f"gemini:{self._model}"
 
-    def extract(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
         """Extract one group of fields from the passages shown for them.
 
         Args:
             specs: The fields to extract.
             chunks: The passages retrieved for those fields.
+            product: The product being monitored, so a shared document's scope
+                is not mistaken for this product's terms.
 
         Returns:
             The model's structured answer.
@@ -93,7 +99,7 @@ class GeminiExtractor:
         """
         from google.genai import types
 
-        prompt = build_prompt(specs, chunks)
+        prompt = build_prompt(specs, chunks, product=product)
         last: Exception | None = None
         for attempt in range(1, self._max_attempts + 1):
             try:
@@ -170,12 +176,16 @@ class RuleBasedExtractor:
         """Identifier recorded on the extraction and shown in the report."""
         return RULE_BASED
 
-    def extract(self, specs: list[FieldSpec], chunks: list[Chunk]) -> ExtractionResponse:
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
         """Extract fields by pattern matching over the passages.
 
         Args:
             specs: The fields to extract.
             chunks: The passages retrieved for those fields.
+            product: Unused: pattern matching has no notion of product scope,
+                which is one of the ways it is worse than a model.
 
         Returns:
             One answer per field, NOT_FOUND where no sentence qualifies.

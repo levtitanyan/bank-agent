@@ -1,0 +1,22 @@
+# When a detected change deserves a human's attention.
+#
+# Policy, not logic: a bank-side reviewer should be able to say "two points on a
+# rate is too loose" and change it here rather than in Python.
+thresholds:
+  # A rate moving more than this many percentage points is large. Two points on
+  # a consumer loan is roughly a tenth of the rate - well beyond a routine
+  # adjustment, and worth confirming before it is reported as fact.
+  large_rate_points: 2.0
+  # An amount moving more than this share of its previous value is large.
+  large_amount_percent: 25.0
+  # A term moving more than this many months is large.
+  large_term_months: 12.0
+
+review:
+  # Triggers that stop for a human. Each is a condition the system can detect
+  # but cannot responsibly resolve alone.
+  on_large_change: true        # a big move in a published tariff
+  on_source_conflict: true     # two official sources disagreeing
+  on_rival_documents: true     # two plausible official documents for one product
+  on_low_quality: true         # the document itself was barely readable
+  on_ambiguous_product: true   # the query fits more than one monitored product

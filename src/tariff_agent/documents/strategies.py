@@ -14,8 +14,15 @@ The rule, in one place so it can be stated and tested:
    minimum an OCR candidate is ineligible however good its text looks. The two
    scales measure different things and must not be added together.
 3. The highest text score wins.
-4. A tie goes to the non-OCR candidate: it is cheaper, and Tesseract's Armenian
-   model misreads «և» as «ն», which the parser gets right.
+4. OCR must win by a **margin**, not by a hair. Tesseract's Armenian model
+   misreads «և» as «ն» and, on the real tariff book, «չի» as «sh» - turning
+   «չի գանձվում» ("is not charged") into something unreadable. The quality
+   score cannot see those corruptions: it measures whether text reads like
+   text, not whether it says what the page says. On page 2 of the tariff book
+   OCR scored 1.00 against the parser's 0.92 and won, and the negation that
+   made a fee zero was lost with it. Requiring a clear margin keeps OCR where
+   it is genuinely needed - the mortgage summary, where the parser scores 0.2 -
+   without letting it displace a working parse.
 """
 
 from __future__ import annotations
@@ -28,6 +35,9 @@ from tariff_agent.documents.quality import TextQuality, score_text
 from tariff_agent.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+OCR_MARGIN = 0.10
+"""How much better OCR must score before it displaces a parsed reading."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +122,21 @@ def choose_best_text(
     if not eligible:
         return None
 
-    # Sort by score, then prefer non-OCR: the tie-break is the second key.
     best = max(eligible, key=lambda candidate: (candidate.quality.score, not candidate.is_ocr))
+    if best.is_ocr:
+        parsed = [candidate for candidate in eligible if not candidate.is_ocr]
+        rival = max(parsed, key=lambda candidate: candidate.quality.score, default=None)
+        if rival is not None and best.quality.score - rival.quality.score < OCR_MARGIN:
+            logger.info(
+                "ocr_margin_not_met",
+                extra={
+                    "page": page,
+                    "ocr_score": round(best.quality.score, 3),
+                    "parsed_score": round(rival.quality.score, 3),
+                    "margin": OCR_MARGIN,
+                },
+            )
+            best = rival
     logger.info(
         "page_strategy_chosen",
         extra={
