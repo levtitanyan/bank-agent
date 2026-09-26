@@ -27,7 +27,17 @@ MATCH_THRESHOLD = 0.90
 """How closely a quote must match the passage. Below this it is not a quote."""
 
 MIN_QUOTE_CHARS = 8
-"""Shorter than this, a "quote" matches almost anything and proves nothing."""
+"""Below this length a quote is accepted only on an exact match.
+
+`partial_ratio` scores a short needle against almost any haystack - «1%» is
+0.90-similar to half a tariff book - so fuzzy matching cannot be trusted here.
+Rejecting short quotes outright was worse, though: the currency field's whole
+answer is «ՀՀ դրամ», seven characters, and a correct verbatim quote of it was
+being discarded as unverifiable. Whether the field survived depended on whether
+the model had happened to include the label, which made the result differ
+between runs over an unchanged page. A short quote that occurs *exactly* is
+stronger evidence than a long one at 0.91, so exactness is what is required.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +80,24 @@ def _similarity(quote: str, text: str) -> float:
     return float(fuzz.partial_ratio(needle, haystack)) / 100.0
 
 
+def _occurs_exactly(quote: str, text: str) -> bool:
+    """Report whether a quote occurs verbatim in a passage.
+
+    Whitespace is normalized on both sides, because a PDF breaks lines where
+    the model does not; nothing else is relaxed.
+
+    Args:
+        quote: The quoted text.
+        text: The passage.
+
+    Returns:
+        True when the quote is a literal substring of the passage.
+    """
+    needle = " ".join(quote.split())
+    haystack = " ".join(text.split())
+    return bool(needle) and needle in haystack
+
+
 def verify_quote(
     quote: str,
     cited_chunk_id: str,
@@ -91,14 +119,11 @@ def verify_quote(
         is not verified - and the caller turns that into NOT_FOUND.
     """
     cleaned = quote.strip()
-    if len(cleaned) < MIN_QUOTE_CHARS:
-        return QuoteCheck(
-            verified=False,
-            score=0.0,
-            reason=f"the quote is too short to verify ({len(cleaned)} characters)",
-        )
-
     by_id = {chunk.chunk_id: chunk for chunk in retrieved}
+    if len(cleaned) < MIN_QUOTE_CHARS:
+        return _verify_short(cleaned, cited_chunk_id, retrieved, by_id)
+
+
     cited = by_id.get(cited_chunk_id)
     if cited is not None:
         score = _similarity(cleaned, cited.text)
@@ -153,5 +178,64 @@ def verify_quote(
         reason=(
             f"the quote does not occur in any passage retrieved for this field "
             f"(best match {best_score:.2f} < {threshold:.2f})"
+        ),
+    )
+
+
+def _verify_short(
+    quote: str,
+    cited_chunk_id: str,
+    retrieved: list[Chunk],
+    by_id: dict[str, Chunk],
+) -> QuoteCheck:
+    """Verify a quote too short for fuzzy matching, by requiring an exact one.
+
+    The citation-correction rule is the same as for a long quote: the passage
+    the quote is actually found in must be one retrieved for this field.
+
+    Args:
+        quote: The quoted text, already stripped.
+        cited_chunk_id: The passage the model cited.
+        retrieved: The passages shown for this field.
+        by_id: ``retrieved`` indexed by chunk id.
+
+    Returns:
+        Verified against whichever retrieved passage contains the quote
+        verbatim, preferring the cited one; otherwise not verified.
+    """
+    cited = by_id.get(cited_chunk_id)
+    if cited is not None and _occurs_exactly(quote, cited.text):
+        return QuoteCheck(
+            verified=True,
+            score=1.0,
+            chunk=cited,
+            reason=f"short quote occurs verbatim in {cited_chunk_id}",
+        )
+    for chunk in retrieved:
+        if chunk.chunk_id != cited_chunk_id and _occurs_exactly(quote, chunk.text):
+            logger.info(
+                "quote_citation_corrected",
+                extra={"cited": cited_chunk_id, "actual": chunk.chunk_id, "score": 1.0},
+            )
+            return QuoteCheck(
+                verified=True,
+                score=1.0,
+                chunk=chunk,
+                corrected=True,
+                reason=(
+                    f"short quote was cited to {cited_chunk_id or 'nothing'} but occurs "
+                    f"verbatim in {chunk.chunk_id}, which was retrieved for this field"
+                ),
+            )
+    logger.warning(
+        "quote_unverified_short",
+        extra={"cited": cited_chunk_id, "chars": len(quote)},
+    )
+    return QuoteCheck(
+        verified=False,
+        score=0.0,
+        reason=(
+            f"the quote is only {len(quote)} characters, too short to match fuzzily, "
+            "and does not occur verbatim in any passage retrieved for this field"
         ),
     )

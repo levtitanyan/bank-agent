@@ -154,10 +154,19 @@ TARIFF_FIELDS: Final[tuple[FieldSpec, ...]] = (
         # (commission), as in «վարկի տրամադրման պահին ... գանձվում է միանվագ
         # միջնորդավճար». Query terms taken from the field's title instead of the
         # documents are the commonest reason a stated value is reported missing.
+        #
+        # The mortgage term sheet is the same lesson a third time. It names the
+        # charge with the bare word - «Միջնորդավճար - վարկի գումարի 1%» - and
+        # every term above carries «տրամադրման» or «միանվագ» as its identifying
+        # token, so the gate rejected the one clause that answers the field and
+        # the mortgage reported NOT_FOUND. The collocation with «վարկի գումարի»
+        # is what distinguishes a commission charged on the loan amount from the
+        # monthly servicing one, so the bare word is not added on its own.
         query_terms=(
             "վարկի տրամադրման միանվագ միջնորդավճար",
             "վարկի տրամադրման վճար",
             "միանվագ վճար տրամադրման",
+            "միջնորդավճար վարկի գումարի",
             "disbursement fee",
         ),
     ),

@@ -200,8 +200,49 @@ def test_a_quote_from_outside_the_field_is_refused() -> None:
 
 
 def test_a_quote_too_short_to_mean_anything_is_refused() -> None:
-    """«13,5%» alone matches half the document and proves nothing."""
-    assert not verify_quote("13,5%", "c001", [chunk(PASSAGE)]).verified
+    """«13,5%» does not occur here, and is too short to be matched fuzzily."""
+    check = verify_quote("13,5%", "c001", [chunk(PASSAGE)])
+    assert not check.verified
+    assert "too short to match fuzzily" in check.reason
+
+
+def test_a_short_quote_that_occurs_verbatim_is_verified() -> None:
+    """The currency field's entire answer is seven characters long.
+
+    Rejecting it for being short discarded a correct, fully supported value,
+    and did so only on the runs where the model omitted the label - so the
+    same unchanged page gave a different answer from one run to the next.
+    """
+    passage = chunk("Արժույթ ՀՀ դրամ Տևողություն՝ 9-ից 60 ամիս")
+    check = verify_quote("ՀՀ դրամ", "c001", [passage])
+    assert check.verified
+    assert check.score == 1.0
+    assert check.chunk is passage
+
+
+def test_a_short_quote_is_held_to_exact_occurrence() -> None:
+    """Exactness is what replaces the length floor, not a lower threshold.
+
+    «դրամով» is one letter from «դրամ» and scores well above the fuzzy
+    threshold; it is refused because the passage does not contain it.
+    """
+    check = verify_quote("դրամով", "c001", [chunk("Արժույթ ՀՀ դրամ")])
+    assert not check.verified
+
+
+def test_a_short_quote_cited_to_the_wrong_passage_is_corrected() -> None:
+    """Citation correction stays as narrow for short quotes as for long ones."""
+    passages = [chunk("Ժամկետը 60 ամիս", "c001"), chunk("Արժույթ ՀՀ դրամ", "c002")]
+    check = verify_quote("ՀՀ դրամ", "c001", passages)
+    assert check.verified
+    assert check.corrected
+    assert check.chunk is not None
+    assert check.chunk.chunk_id == "c002"
+
+
+def test_a_short_quote_from_outside_the_field_is_refused() -> None:
+    """A verbatim match in a passage nobody retrieved is still not evidence."""
+    assert not verify_quote("ՀՀ դրամ", "c001", [chunk("Ժամկետը 60 ամիս")]).verified
 
 
 def test_whitespace_differences_do_not_break_verification() -> None:
