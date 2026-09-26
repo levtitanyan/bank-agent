@@ -24,6 +24,7 @@ from datetime import UTC, date, datetime
 from pydantic import HttpUrl
 
 from tariff_agent.config import Allowlist, Product
+from tariff_agent.documents.document import Document
 from tariff_agent.errors import ExtractionError
 from tariff_agent.extraction.conflict import FieldConflict, detect_conflict
 from tariff_agent.extraction.extractor import Extractor
@@ -80,6 +81,7 @@ def extract_tariffs(
     allowlist: Allowlist,
     *,
     top_k: int = 4,
+    primary_document: Document | None = None,
 ) -> ExtractionOutcome:
     """Extract, verify and validate every tariff field for one product.
 
@@ -90,6 +92,10 @@ def extract_tariffs(
         extractor: Which backend reads the passages.
         allowlist: Domains evidence may come from.
         top_k: Passages per field per source role.
+        primary_document: The document the values mostly come from. Supplies the
+            provenance a report needs - when the bank last changed it, when we
+            last checked, which edition - none of which can be recovered from a
+            chunk alone.
 
     Returns:
         The outcome, including what could not be answered and why.
@@ -175,16 +181,36 @@ def extract_tariffs(
         )
 
     primary_source = _primary_chunk(retrieval)
+    now = datetime.now(UTC)
     extraction = TariffExtraction(
         bank=bank,
         product_id=product.id,
-        document_name=primary_source.document_name if primary_source else product.name_en,
-        source_url=HttpUrl(
-            primary_source.source_url
-            if primary_source
-            else (product.canonical_page or "https://acba.am/")
+        document_name=(
+            primary_document.document_name
+            if primary_document
+            else (primary_source.document_name if primary_source else product.name_en)
         ),
-        retrieved_at=primary_source.retrieved_at if primary_source else datetime.now(UTC),
+        source_url=HttpUrl(
+            primary_document.source_url
+            if primary_document
+            else (
+                primary_source.source_url
+                if primary_source
+                else (product.canonical_page or "https://acba.am/")
+            )
+        ),
+        retrieved_at=(
+            primary_document.retrieved_at
+            if primary_document
+            else (primary_source.retrieved_at if primary_source else now)
+        ),
+        checked_at=primary_document.checked_at if primary_document else now,
+        document_date=(
+            primary_document.document_date
+            if primary_document
+            else (primary_source.document_date if primary_source else None)
+        ),
+        document_edition=primary_document.document_edition if primary_document else None,
         extraction_method=extractor.method,
         prompt_version=PROMPT_VERSION,
         fields=fields,
