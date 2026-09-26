@@ -3,12 +3,19 @@
 How the ACBA tariff monitoring agent is put together: the modules, the order they
 run in, and the decisions behind them.
 
-> **Current state: Phase 5 of 9.** A fuzzy product name resolves to a product, to its
-> official ACBA sources, and those sources are parsed into clean pages, tables and sections
-> and then indexed — so the system answers, per tariff field, *which passages state this, and
-> is any of them actually relevant?* Extraction, validation, snapshots, change detection, HITL
-> and the ADK agent are not built. Sections marked *(Phase N)* name the phase that built them;
-> anything describing a later phase is written in the future tense.
+> **Current state: Phase 7 of 9.** The pipeline runs end to end against the live site: a
+> fuzzy product name resolves to a product, to its official ACBA sources; those are fetched,
+> parsed, cleaned and indexed; Gemini extracts each tariff field from retrieved passages;
+> every quote is verified against the passage it was attributed to; values are normalized and
+> validated; a snapshot is stored, diffed against the previous one, and anything large,
+> conflicting or ambiguous stops for a human whose decision is remembered.
+>
+> **Measured:** 17 of 20 fields found across two products, stable across consecutive runs,
+> with all three absences accounted for in [`LIMITATIONS.md`](LIMITATIONS.md). 374 tests.
+>
+> **Not built:** the ADK agent and CLI (Phase 8), the evaluation dataset and demos (Phase 9).
+> Sections marked *(Phase N)* name the phase that built them; anything describing a later
+> phase is written in the future tense.
 
 ---
 
@@ -35,19 +42,18 @@ flowchart TD
     E2 --> F
     F --> G["Index + retrieve<br/>BM25 + embeddings, fused with RRF"]
     G --> H["Structured extraction<br/>Gemini, response_schema, temp 0"]
-    H --> I["Verify quotes<br/>fuzzy match ≥ 0.90"]
+    H --> I["Verify quotes<br/>fuzzy ≥ 0.90, exact if short"]
     I --> J["Deterministic validation<br/>normalize, range checks, domain checks"]
-    J --> K{"Safe to proceed?"}
-    K -->|no| L["HITL<br/>reviewer decides with evidence"]
-    K -->|yes| M["Store snapshot (SQLite)"]
-    L -->|approved| M
-    L -->|rejected| X["Stop, nothing saved"]
-    M --> N["Diff vs previous snapshot<br/>on normalized values"]
-    N --> O["Report: values, evidence, changes"]
+    J --> M["Store snapshot (SQLite)<br/>always — the status records our stance"]
+    M --> N["Diff vs previous snapshot<br/>on normalized values, with provenance"]
+    N --> K{"Large, conflicting<br/>or ambiguous?"}
+    K -->|no| O["Report: values, evidence, changes"]
+    K -->|yes| L["HITL<br/>reviewer decides with evidence"]
+    L -->|"approved / rejected<br/>(remembered by subject)"| O
 ```
 
-**What Gemini will decide (Phase 6):** which retrieved chunk answers a given tariff field,
-and what text to quote as the evidence for it. That is the whole of it.
+**What Gemini decides *(Phase 6)*:** which retrieved chunk answers a given tariff field, and
+what text to quote as the evidence for it. That is the whole of it.
 
 **What code decides — never the model:** which product the user meant (deterministic
 synonyms + fuzzy matching, [P3-D1](DECISIONS.md#p3-d1--product-resolution-is-deterministic--no-gemini)),
@@ -63,6 +69,7 @@ config/                        version-controlled policy, readable without openi
   allowlist.yaml               the only fetchable hosts: acba.am, www.acba.am, https only
   products.yaml                the two products: synonyms, canonical page, exclusions, seeds
   discovery.yaml               source-ranking weights, including the negative ones
+  monitoring.yaml              change thresholds and which triggers stop for a human
 src/tariff_agent/
   fields.py                    the tariff field registry — the spine of the project
   models.py                    Evidence / FieldValue / TariffExtraction + their invariants
@@ -95,6 +102,24 @@ src/tariff_agent/
     index.py                   per-document index keyed by content hash
     retrieval.py               weighted RRF fusion and the relevance gate
     knowledge.py               the façade: documents -> retriever
+    value_shapes.py            what a value of each ValueKind looks like, for ranking
+  extraction/
+    groups.py                  which fields are asked for in one call, and why
+    prompt.py                  the instructions, versioned; passages are data, not orders
+    schema.py                  the Gemini response schema — the model cannot invent a field
+    extractor.py               Gemini at temperature 0, and an offline rule-based peer
+    cache.py                   answers keyed by prompt version + model + fields + passages
+    verify.py                  every quote matched back to the passage it was cited to
+    normalize.py               verbatim text -> a comparable value, or None
+    validate.py                range and domain checks that downgrade, never edit
+    conflict.py                primary vs supporting, compared on normalized values
+    pipeline.py                the façade: retriever + extractor -> TariffExtraction
+  snapshots/
+    store.py                   SQLite: snapshots and remembered review decisions
+    diff.py                    normalized diffing, per-kind magnitude, provenance
+    review.py                  the Reviewer Protocol, and a decision log keyed by subject
+    report.py                  what a business user reads: values, evidence, what moved
+    pipeline.py                the façade: extract -> store -> diff -> review -> report
   observability/logging.py     single-line JSON logs with a per-run correlation id
 tests/
   test_phase1_contracts.py     52 tests: registry, config, invariants, migration, run logs
@@ -105,10 +130,13 @@ tests/
   test_discovery_sources.py    34 tests: scoring, primary selection, budgets, HITL, sitemaps
   test_document_cleaning.py    16 tests: each cleaning rule alone
   test_document_quality.py      7 tests: every extraction failure mode
-  test_document_processing.py  28 tests: strategies, PDF, HTML, tables, OCR
+  test_document_processing.py  33 tests: strategies, PDF, HTML, tables, OCR, the OCR margin
   test_rag_text.py             13 tests: stemming, folding, the identifying-token rule
   test_rag_chunking.py         10 tests: page boundaries, offsets, tables, metadata
-  test_rag_retrieval.py        19 tests: fusion, the gate, index reuse, degradation
+  test_rag_retrieval.py        25 tests: fusion, the gate, index reuse, degradation
+  test_extraction_units.py     52 tests: normalizing, verifying, validating, conflicts
+  test_extraction_pipeline.py  17 tests: the whole extraction path against a fake model
+  test_snapshots.py            29 tests: storing, diffing, significance, review, the report
   fixtures/                    trimmed REAL ACBA pages + synthetic PDFs reproducing defects
 data/samples/ocr/              a real ACBA page rendered to an image, for the OCR test
 ```
@@ -407,7 +435,7 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 | 3 | Product resolution + official source discovery | ✅ |
 | 4 | PDF/HTML processing, cleaning, OCR fallback | ✅ |
 | 5 | Chunking + hybrid BM25/embedding RAG | ✅ |
-| 6 | Gemini structured extraction + deterministic validation | next |
-| 7 | Snapshots, normalized diffing, human-in-the-loop | |
-| 8 | ADK agent, pipeline, CLI | |
+| 6 | Gemini structured extraction + deterministic validation | ✅ |
+| 7 | Snapshots, normalized diffing, human-in-the-loop | ✅ |
+| 8 | ADK agent, pipeline, CLI | next |
 | 9 | Demos, evaluation dataset, remaining docs | |

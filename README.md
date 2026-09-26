@@ -8,12 +8,17 @@ escalating to a human when it cannot decide safely.
 
 Python 3.11 · Google ADK · Gemini
 
-> **Status: Phase 6 of 9.** A fuzzy product name resolves to a product, to its official
-> ACBA sources, those sources are parsed into clean pages, tables and sections, indexed, and
-> read by Gemini into the ten tariff fields — each carrying a quote verified against the
-> passage it came from, normalized deterministically, and validated. Snapshots, change
-> detection, the reviewer interface and the ADK agent are not built yet. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-> for the design and the roadmap.
+> **Status: Phase 7 of 9.** A fuzzy product name resolves to a product, to its official ACBA
+> sources; those are parsed into clean pages, tables and sections, indexed, and read by Gemini
+> into the ten tariff fields — each carrying a quote verified against the passage it came
+> from, normalized deterministically, and validated. Runs are stored as snapshots and diffed
+> against the previous one, and anything large, conflicting or ambiguous stops for a human
+> whose decision is remembered.
+>
+> **17 of 20 fields found** across two products, stable across consecutive runs; 374 tests.
+> The ADK agent and CLI (Phase 8) and the evaluation dataset (Phase 9) are not built yet.
+> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap, and
+> [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what it gets wrong.
 
 ---
 
@@ -62,6 +67,8 @@ human-in-the-loop review · two controlled failures (404 and timeout).
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | End-to-end flow, module map, what Gemini decides vs what code decides, test strategy |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Every design decision by phase: options considered, why this one, which requirement it serves |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | What the system gets wrong, what it has not measured, and each unfound field accounted for individually |
+| [docs/PROGRESS_REPORT.md](docs/PROGRESS_REPORT.md) | A phase-by-phase report of what was built, what running it live revealed, and requirement coverage |
 
 ## Ground rules this project follows
 

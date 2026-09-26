@@ -1,17 +1,19 @@
 # ACBA Tariff Monitoring Agent — progress report
 
-**Phases 1–5 of 9 complete:** contracts · guarded HTTP · discovery · document processing ·
-retrieval.
+**Phases 1–7 of 9 complete:** contracts · guarded HTTP · discovery · document processing ·
+retrieval · extraction and verification · snapshots, change detection and human review.
 
 | | |
 |---|---|
-| Tests | **270 passing**, none touching the network |
+| Result | **17 of 20 tariff fields found** across two products, stable across consecutive runs; all three absences accounted for individually |
+| Tests | **374 passing**, none touching the network |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
-| Code | ~7,000 lines source (35 modules) · ~3,600 lines tests · 19 commits |
-| Verified against | `acba.am`, live, at each phase boundary — including a measured retrieval comparison |
+| Code | ~11,400 lines source (53 modules) · ~5,000 lines tests · 30 commits |
+| Verified against | `acba.am`, live, at each phase boundary — including a measured retrieval comparison and a two-model evaluation |
 
-This report states what works and how it decides. Section 7 states what does not work yet,
-including defects found by audit and bugs found by running the code against the real site.
+This report states what works and how it decides. Section 7 lists the defects that only
+running against the real site revealed; [LIMITATIONS.md](LIMITATIONS.md) accounts for what the
+finished system still gets wrong, field by field.
 
 ---
 
@@ -41,8 +43,27 @@ consumer_loan   gate 9/10 · recall@4 9/10   (the 10th is application_fee, which
 mortgage        gate 10/10 · recall@4 10/10 — values on pages 1–7 of the ամփոփագիր
 ```
 
-**Not built yet:** Gemini extraction, validation, snapshots, change detection, the reviewer
-interface, the ADK agent, the CLI, demos, the evaluation set. Phases 6–9.
+And then extracts each field, with a verified quote behind every value:
+
+```
+Սպառողական վարկ (consumer_loan)          17/20 fields found across both products
+  Արժույթ                  ՀՀ դրամ                    ← «Արժույթ ՀՀ դրամ»
+  Անվանական տոկոսադրույք   20.1-21.6%                 ← «Տարեկան անվանական տոկոսադրույք՝ 20.1-21.6%»
+                             + variants: acba digital 17.5-21.6% · Մասնաճյուղ 20.1 - 21.6%
+  Սպասարկման վճար          չի գանձվում                ← tariff book p2, normalized to {kind: none}
+  Հայտի ուսումնասիրության  NOT_FOUND                  ← the bank does not state it (0 marker hits)
+
+Հիփոթեքային վարկ (mortgage)
+  Փաստացի տոկոսադրույք     15.35 – 17.67%             ← + variants for USD and EUR
+  Հայտի ուսումնասիրության  անվճար                     ← «Անվճար վարկային հայտի ուսումնասիրություն»
+  Տրամադրման վճար          NOT_FOUND                  ← stated, but never labelled as this fee
+```
+
+A second run over unchanged documents makes **zero model calls** and reports **zero changes**.
+A forced edit to a stored value surfaces as one change with both quotes and the magnitude in
+percentage points. A large change stops for a human, and the decision is remembered.
+
+**Not built yet:** the ADK agent, the CLI, demos, the evaluation set. Phases 8–9.
 
 ---
 
@@ -234,6 +255,63 @@ Primary and supporting sources are searched separately, because ACBA's own docum
 the 2023 mortgage summary states 11.9–12.5% where the current product page says 13.75–14.5%.
 Phase 6 needs to see that as a `conflict`, not average over it.
 
+## 6.6 Phase 6 — Extraction, verification and validation
+
+The model is given numbered passages and nothing else — no URLs, no paths, no instructions
+carried over from another run — and asked for a value, a verbatim quote, and the id of the
+passage it came from. Everything after that is deterministic code deciding whether the answer
+is usable.
+
+- **Grouped calls.** Four groups (rates / fees / terms / other), not ten calls and not one. A
+  rate table states both rates; a fee schedule states all three fees. A field that fails
+  inside a group is retried alone; a field correctly reported absent is not retried.
+- **Quote verification is the whole promise.** Every quote is matched back against the passage
+  it was attributed to — rapidfuzz ≥ 0.90, or an exact occurrence when the quote is too short
+  to match fuzzily. Anything unverifiable becomes NOT_FOUND. A quote found in a *different*
+  passage is accepted only if that passage was retrieved for the same field.
+- **Multiple stated values are never collapsed.** ACBA's consumer page states three nominal
+  rates at once. The field carries the full range **and** a `variants` list, each separately
+  quoted and separately verified.
+- **The prompt took four versions**, and the third was worse: a blanket "answer NOT_FOUND if
+  you cannot attribute the value" rule cost the consumer loan's plainly stated currency
+  (17/20 → 16/20). Version 4 narrows it to the case it was written for — a passage listing
+  several products — and the field came back.
+- **Two models measured**, `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite`: 11/11 correct
+  each. They differ on *scope*, not accuracy — 3.1-lite answered the tariff book's four
+  currencies for a single loan, which is exactly what the product-scoping rule addresses.
+  Evidence that the guard rails matter more than the model choice.
+- **Answers are cached** against prompt version, model, fields and the exact passages, so a
+  demonstration cannot be killed by a free-tier quota and a re-run costs nothing.
+
+## 6.7 Phase 7 — Snapshots, change detection and human review
+
+- **A snapshot is always stored**, never withheld pending approval. `stored`,
+  `pending_review`, `confirmed` or `rejected` — the record is the observation, the status is
+  our stance on it. A rejected change stays and remains the baseline, which is the only way a
+  mistaken rejection can be noticed later.
+- **Diffs compare normalized values**, so reformatting a page is not a change, and magnitude
+  is measured in the field's own units: percentage points for rates, relative percent for
+  amounts, months for terms.
+- **A change caused by our own fix is labelled.** Every snapshot records its prompt version
+  and extraction method, and each diff carries `COMPARABLE`, `PROMPT_CHANGED` or
+  `METHOD_CHANGED`. Only the first is evidence about the bank. The report puts the provenance
+  block *above* the values so it cannot be read past.
+- **Review decisions are remembered**, keyed by `(product_id, trigger, subject)` — the thing
+  decided about, not the run that found it. A monitor that re-asks an approved question every
+  run trains its reviewer to approve without reading.
+- **Thresholds are policy** and live in `config/monitoring.yaml`: 2.0 percentage points, 25%
+  of an amount, 12 months, and a switch per trigger.
+
+Verified live, three times over:
+
+| Verification | Result |
+|---|---|
+| Two runs over unchanged documents | 0 changes, 0 model calls, `from_cache=True` — both products |
+| A forced edit, `13.5%` → `13.75-14.5%` | 1 change, `+0.25 percentage points`, both quotes shown |
+| A large change, `8.0%` → `13.75-14.5%` | `+5.75 pp` → reviewer prompted → approved → `confirmed`; the re-run asked nothing |
+
+---
+
 ## 7. What running it against the real site found
 
 Six defects that reasoning alone did not catch. Each is fixed, with a test that fails if it
@@ -255,6 +333,12 @@ returns. This is offered as evidence of method, not of foresight.
 | 5 | Ranking could decide a lexical gate | A field flipped to NOT_FOUND with no lexical fact changed |
 | 4 | A PDF bullet «o …» detected as a section heading | Evidence would cite a bullet as its section |
 | 4 | PDFs had no section detection at all | Every PDF's evidence would carry an empty section |
+| 6 | OCR won a page by 0.076 and had mangled «չի» to «sh» | A stated *absence* of a fee read as unreadable text; fixed with a 0.10 margin |
+| 7 | «0%» and «չի գանձվում» compared as strings | A false source conflict on every run — the fastest way to teach a reviewer that flags mean nothing |
+| 7 | A value compared against the document it came from | The primary disagreeing with itself |
+| 7 | `from_cache` measured the process, not the run | The report's headline claim — *nothing was asked* — wrong exactly when it was true |
+| 7 | The verifier rejected any quote under 8 characters | «ՀՀ դրամ» is seven; a correct value was discarded, and **the same unchanged page gave a different answer between runs** |
+| 7 | Every `disbursement_fee` query term required «տրամադրման» | The mortgage's commission clause, which uses the bare word, never reached the model |
 
 A separate audit of the code found three more, also fixed: an exception-hierarchy accident that
 let a 503 on `robots.txt` be swallowed as "skip this page" (defeating a documented guarantee); a
@@ -265,7 +349,7 @@ have been crawled as if it were a list of pages.
 
 ## 8. Testing
 
-223 tests, none touching the network. `httpx.MockTransport` for HTTP, injected `sleep` for
+374 tests, none touching the network. `httpx.MockTransport` for HTTP, injected `sleep` for
 retries and pacing, mocked Tesseract for OCR logic plus one real-binary test that auto-skips.
 
 | Area | Tests |
@@ -311,11 +395,19 @@ honest production next step · the «և»→«ն» folding is collision-free *in
 general.
 
 **Scope limits:** two products at one bank; `consumer_loan` means one purchasable product, not
-the family · Armenian-language sources only · **a reviewer's decision is not remembered**, so a
-genuinely new rival document will escalate on every run until `products.yaml` is edited.
+the family · Armenian-language sources only. Reviewer decisions *are* now remembered (Phase 7),
+which closes the escalate-every-run gap this section previously recorded.
 
-**Risk ahead:** the model is now `gemini-2.5-flash` (switched from flash-lite before Phase 6,
-since Armenian tariff tables are the hardest thing the system does).
+**The three fields not found**, each accounted for in [LIMITATIONS.md](LIMITATIONS.md):
+consumer `application_fee` — the bank does not state it, zero hits on the loosest possible
+stem; mortgage `disbursement_fee` — stated in both sources but never labelled as this fee, and
+at two different percentages, so the extractor declines rather than choose one reading;
+mortgage `salary_privileges` — «աշխատավարձ» occurs five times, every one of them a tax
+obligation or a certificate requirement, never a privilege.
+
+**Model:** the default is `gemini-3.5-flash-lite`. `gemini-2.5-flash-lite` was retired by
+Google mid-project (404) and `gemini-2.5-flash` hit the free tier's 20-requests-a-day limit
+before it could be measured; that gap is recorded rather than filled with an estimate.
 
 ---
 
@@ -328,15 +420,15 @@ since Armenian tariff tables are the hardest thing the system does).
 | 5.3 | Official source discovery | ✅ |
 | 5.4 | PDF, OCR and document processing | ✅ |
 | 5.5 | Chunking and RAG | ✅ chunking with §5.5 metadata, hybrid retrieval, relevance gate, both modes measured |
-| 5.6 | Structured extraction | Schema ✅ · extraction Phase 6 |
-| 5.7 | Evidence and provenance | Model, sections and page rules ✅ · populated Phase 6 |
-| 5.8 | Deterministic validation | Invariants ✅ · normalizers Phase 6 |
-| 5.9 | Change detection | Storage contract, revalidation, `checked_at` ✅ · diff Phase 7 |
-| 5.10 | Human-in-the-loop | Triggers ✅ · reviewer interface Phase 7 |
-| 5.11 | Error handling | 🟡 network, HTTP, robots, discovery, parse, OCR, embedding failure and irrelevant retrieval ✅ · model and snapshot failures remain |
-| 5.12 | Security | 🟡 allowlist, redirects, caps, robots, XML safety, render cap, secrets ✅ · tool least-privilege and prompt injection arrive with tools and prompts |
+| 5.6 | Structured extraction | ✅ `response_schema` at temperature 0, grouped calls, quote verification, 17/20 fields |
+| 5.7 | Evidence and provenance | ✅ every value carries a verified verbatim quote, its document, page and section |
+| 5.8 | Deterministic validation | ✅ normalizers, range and domain checks that downgrade rather than edit, conflict detection |
+| 5.9 | Change detection | ✅ SQLite snapshots, normalized diffing, per-kind magnitude, provenance separating our changes from the bank's |
+| 5.10 | Human-in-the-loop | ✅ configurable triggers, a reviewer Protocol, decisions persisted by subject and not re-asked |
+| 5.11 | Error handling | ✅ network, HTTP, robots, discovery, parse, OCR, embeddings, irrelevant retrieval, model/API failure and invalid structured output, no previous snapshot |
+| 5.12 | Security | 🟡 allowlist, redirects, caps, robots, XML safety, render cap, secrets, prompt-injection defence ✅ · tool least-privilege arrives with the tools (Phase 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run files, run correlation, per-decision reasons ✅ · run metrics remain |
-| 5.14 | Testing | 🟡 270 tests ✅ · evaluation dataset Phase 9 |
+| 5.14 | Testing | 🟡 374 tests ✅ · evaluation dataset Phase 9 |
 | 5.15 | Python engineering | ✅ structure, type hints, config, logging, tests, pyproject, README, git history |
 
 ---
@@ -345,11 +437,10 @@ since Armenian tariff tables are the hardest thing the system does).
 
 | Phase | Contents |
 |---|---|
-| 5 | Section-aware chunking; hybrid BM25 + embeddings fused with RRF; «և»/«ն» folding |
-| 6 | Gemini structured extraction with quote verification; deterministic normalization and validation |
-| 7 | SQLite snapshots, normalized diffing, the human-in-the-loop gate |
-| 8 | The ADK agent over the same tool functions, plus the CLI |
+| 8 | The ADK agent over the same tool functions, plus the CLI. The tools take ids from previous tool outputs — never raw URLs or paths — so the model's reach is bounded by construction |
 | 9 | Demos, the evaluation dataset and its results, remaining documentation |
 
 Further detail: [ARCHITECTURE.md](ARCHITECTURE.md) for the design,
-[DECISIONS.md](DECISIONS.md) for every decision with the options rejected for each.
+[DECISIONS.md](DECISIONS.md) for every decision with the options rejected for each, and
+[LIMITATIONS.md](LIMITATIONS.md) for what the system gets wrong and what has not been
+measured.

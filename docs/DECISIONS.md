@@ -8,9 +8,11 @@ was not really made.
 Identifiers are phase-scoped (`P2-D4` = Phase 2, decision 4) and stable; later phases append
 rather than renumber.
 
-**Phases covered:** 1 (contracts), 1.5 (review fixes), 2 (HTTP), 3 (discovery). Phases 4–9 —
-document processing, RAG, extraction, snapshots, HITL, the ADK agent — have not been built, so
-their decisions are not listed. Open questions already known are collected at the end.
+**Phases covered:** 1 (contracts), 1.5 (review fixes), 2 (HTTP), 3 (discovery),
+4 (document processing), 5 (retrieval), 6 (extraction), 7 (snapshots, change detection, HITL).
+Phases 8–9 — the ADK agent and CLI, then the evaluation dataset and demos — have not been
+built, so their decisions are not listed. Open questions already known are collected at the
+end; what the system gets wrong or has not measured is in [`LIMITATIONS.md`](LIMITATIONS.md).
 
 ---
 
@@ -1156,10 +1158,149 @@ problem during Phase 6 would be far more expensive.
 
 ---
 
+# Phase 7 — Snapshots, change detection and human review
+
+*Two runs are a monitor only if the second one can say what moved since the first, and why.*
+
+### P7-D1 · A snapshot is always stored, never withheld pending approval
+**Requirement:** 5.9 · 5.10 · **File:** [`snapshots/store.py`](../src/tariff_agent/snapshots/store.py)
+
+| Option | Consequence |
+|---|---|
+| Hold a change back until a human approves it | The store no longer records what the bank published, only what we agreed to believe; a rejected change leaves no trace that it happened |
+| **Chosen: store it, and mark it** | `SnapshotStatus` is `stored`, `pending_review`, `confirmed` or `rejected`. The record is the observation; the status is our stance on it |
+
+A reviewer rejecting a change does not delete it. The snapshot stays, marked `rejected`, and
+the next run diffs against it — so a value we disbelieved is still the baseline for what
+happens next, which is the only way a mistaken rejection can be noticed later.
+
+### P7-D2 · Changes are compared on normalized values, not text
+**Requirement:** 5.9 · **File:** [`snapshots/diff.py`](../src/tariff_agent/snapshots/diff.py)
+
+«50,000-10,000,000 ՀՀ դրամ» and «50.000-10.000.000 ՀՀ դրամ» are the same amount written two
+ways, and ACBA uses both — sometimes in one document. Diffing the text reports a change every
+time the bank reformats a page. Diffing `normalized` reports one when the number moves. Where
+a value could not be normalized, the diff falls back to text for that field and says so.
+
+### P7-D3 · Magnitude is measured in the field's own units
+**Requirement:** 5.9
+
+A rate moving from 13.5% to 14.5% is one *percentage point*, not a 7.4% change, and calling it
+the latter makes a large move look small. Magnitude is computed per `ValueKind`: percentage
+points for rates, relative percent for amounts, months for terms. Anything else is reported as
+changed without a magnitude rather than with a misleading one.
+
+### P7-D4 · A change caused by our own fix is labelled as such
+**Requirement:** 5.9 · 5.13
+
+The most dangerous diff this system can produce is one that reads as a bank change but was
+caused by us — a reworded prompt, a better OCR decision, a corrected query term. Every
+snapshot records `prompt_version` and `extraction_method`, and the diff carries a
+`Provenance`:
+
+| Provenance | Meaning |
+|---|---|
+| `COMPARABLE` | Same prompt version and method — the difference is the bank's |
+| `PROMPT_CHANGED` | The prompt was rewritten between the two runs |
+| `METHOD_CHANGED` | A different extractor or model produced them |
+
+Only a `COMPARABLE` diff is evidence about the bank. The others are still shown — suppressing
+them would hide real movement — but they are labelled, and the report puts the provenance
+block *above* the values so it cannot be read past.
+
+### P7-D5 · Thresholds are policy, and live in config
+**Requirement:** 5.10 · **File:** [`config/monitoring.yaml`](../config/monitoring.yaml)
+
+2.0 percentage points, 25% of an amount, 12 months. A bank-side reviewer should be able to
+say "two points is too loose" without touching Python. The triggers that stop for a human are
+listed there too, each one switchable.
+
+### P7-D6 · A review decision is remembered, keyed by what it was about
+**Requirement:** 5.10 · **File:** [`snapshots/review.py`](../src/tariff_agent/snapshots/review.py)
+
+This closes P3-D18. A monitor that re-asks an approved question every run trains its reviewer
+to approve without reading, which is worse than not asking. Decisions are persisted in a
+`reviews` table with a unique index on `(product_id, trigger, subject)`; the subject is the
+thing decided about, not the run that found it. Verified live: after approving a 5.75-point
+rate move, the next run over the same documents asked nothing.
+
+### P7-D7 · The reviewer is a Protocol, and an unknown answer defers
+**Requirement:** 5.10 · 5.11
+
+`AutoReviewer` (names itself `auto-approved`, so an unattended run is never mistaken for a
+human one), `ScriptedReviewer` for tests, `CliReviewer` for a person. Any answer the CLI does
+not recognise becomes `DEFERRED`, never an approval — a mistyped key must not confirm a
+tariff change.
+
+### P7-D8 · The first run reports a baseline, not twenty changes
+**Requirement:** 5.9 · 5.11
+
+`baseline_diff()` exists so that "no previous snapshot" is a named state rather than a diff
+against nothing. The report says so plainly; a first run that announced ten changes would be
+noise on every new product.
+
+### P7-D9 · «0%» and «չի գանձվում» are the same fact
+**Requirement:** 5.8 · 5.10 · **File:** [`extraction/conflict.py`](../src/tariff_agent/extraction/conflict.py)
+
+Found by running the whole pipeline against the live site. The tariff book writes «0%» where
+the product page writes «սպասարկման միջնորդավճարներ չկան»; the strings differ, so every run
+flagged the consumer loan's service fee as a source conflict and asked a human about it.
+`_is_zero_charge` compares the normalized forms instead — `{kind: none}` and `{min: 0, max: 0}`
+are equal. A false conflict is not a harmless extra check: it is the fastest way to teach a
+reviewer that the flags mean nothing.
+
+### P7-D10 · A value is never compared against the document it came from
+**Requirement:** 5.8
+
+Same live run. When a field's value was extracted from a supporting document's passage, the
+conflict check then compared the primary against that same document and found it disagreeing
+with itself. `_came_from_supporting()` skips the comparison when the evidence already came
+from the source we were about to consult.
+
+### P7-D11 · `from_cache` describes the run, not the process
+**Requirement:** 5.13
+
+It was computed from the extractor's lifetime counters, so a process that had ever missed
+reported `from_cache=False` forever — including on a second run where nothing had in fact been
+asked. The report's headline claim, *nothing was asked*, was wrong exactly when it mattered.
+Now computed from per-run deltas.
+
+### P7-D12 · A short quote is verified by exact occurrence, not rejected
+**Requirement:** 5.6 · 5.7 · **File:** [`extraction/verify.py`](../src/tariff_agent/extraction/verify.py)
+
+Amends P6-D2. The verifier refused any quote under eight characters, because rapidfuzz
+`partial_ratio` scores a short needle against almost any haystack. The floor was right about
+fuzzy matching and wrong about the remedy: the currency field's whole answer is «ՀՀ դրամ» —
+seven characters — and a correct verbatim quote of it was being discarded. The field survived
+only on runs where the model happened to quote the label too, so *the same unchanged page
+reported «ՀՀ դրամ» one run and NOT_FOUND the next*.
+
+A short quote is now held to an **exact** occurrence in a passage retrieved for that field.
+That is stronger evidence than a long quote at 0.91, not weaker, and it removes the
+false-positive risk the length floor was guarding against. Citation correction applies
+unchanged. This also recovered the consumer loan's disbursement fee, stated as «0%».
+
+### P7-D13 · Query terms are corrected against the documents, a third time
+**Requirement:** 5.5 · **File:** [`fields.py`](../src/tariff_agent/fields.py)
+
+The mortgage term sheet names its commission with the bare word — «Միջնորդավճար - վարկի
+գումարի 1%» — while every `disbursement_fee` term carried «տրամադրման» or «միանվագ» as its
+identifying token, so the relevance gate rejected the one clause that answers the field.
+Adding the collocation «միջնորդավճար վարկի գումարի» brings both sources' clauses to the model.
+
+The model still declines to report the value, which is correct: the document never says this
+commission *is* the disbursement fee, and the two sources state different percentages. The
+point of the fix is the distinction it buys — NOT_FOUND now means *shown and not
+attributable* rather than *never retrieved*. See
+[`LIMITATIONS.md` §1.2](LIMITATIONS.md).
+
+---
+
 # Known gaps and open questions
 
 Things already known to need a decision later, recorded so they are not discovered in the
-review instead:
+review instead. What the finished system gets *wrong*, and what has not been measured, is
+accounted for field by field in [`LIMITATIONS.md`](LIMITATIONS.md).
 
 | Topic | Status |
 |---|---|
@@ -1168,9 +1309,9 @@ review instead:
 | First diff after a registry change | Shows `NOT_FOUND → value` as a change (P1.5-D2) |
 | Unlisted transliterations | Will not resolve (P3-D7) |
 | Fixture staleness | Real fixtures date; the live script re-verifies, but they will need refreshing (P3-D21) |
-| `gemini-2.5-flash-lite` | Chosen for cost; lite is weaker at structured extraction from Armenian tables, which is Phase 6's hard part. One env var to change |
+| ~~`gemini-2.5-flash-lite`~~ | **Superseded:** retired by Google mid-project (404). The default is now `gemini-3.5-flash-lite`, chosen by quota and measured against `gemini-3.1-flash-lite` (P6-D11, P6-D14). `gemini-2.5-flash` remains unmeasured — see [`LIMITATIONS.md` §3.1](LIMITATIONS.md) |
 | Scoring weights are hand-tuned | Validated against two products on one bank; the Phase 9 evaluation set should measure them |
-| HITL decisions are not remembered | A new rival document will stop every run until `products.yaml` is edited; persisting reviewer choices belongs with the Phase 7 snapshot store (P3-D18) |
+| ~~HITL decisions are not remembered~~ | **Closed** in Phase 7: decisions persist in a `reviews` table keyed by `(product_id, trigger, subject)`, verified live — an approved change is not re-asked (P7-D6) |
 | Cache is unbounded | No size limit, TTL or eviction, and writes are not atomic. A crash mid-write orphans a body file, which the next read treats as absent |
 | `Crawl-delay` is not read | Pacing is a fixed configured interval (P2-D22); robots.txt may ask for more |
 | Identical edge content looks like furniture | Content repeated at the top or bottom of every page is removed (P4-D8) |
@@ -1178,6 +1319,7 @@ review instead:
 | Stemming misses vowel alternation | «ամփոփագիր» and «ամփոփագրի» do not meet, nor «ուսումնասիրության» and «ուսումնասիրման» (P5-D1) |
 | Retrieval weights are hand-set | TERM_WEIGHTS and SHAPE_WEIGHT were tuned against two products; the Phase 9 evaluation set should measure them (P5-D5) |
 | JS-rendered links are invisible | ACBA is server-rendered enough today; a redesign would break discovery silently |
+| Reported values keep OCR damage | «և» reads as «ն» in values taken from the scanned mortgage PDF; the fold is deliberate and reversing it for display is unwritten ([`LIMITATIONS.md` §2.1](LIMITATIONS.md)) |
 | Product granularity | `consumer_loan` now means one purchasable product, not the family. Monitoring the others would mean more entries in `products.yaml`, not new code (P3-D20) |
 
 ---
@@ -1190,14 +1332,14 @@ review instead:
 | 5.2 | Focused tools | Phase 8 · the functions they will wrap exist and are pure |
 | 5.3 | Official source discovery | ✅ P3-D1…D20, P1-D10, P2-D2 |
 | 5.4 | PDF / OCR processing | ✅ P4-D1…D13 — digital parse, OCR peer strategy, Armenian cleaning, tables, HTML |
-| 5.5 | Chunking and RAG | Phase 5 · per-field query terms exist (P1-D1) |
-| 5.6 | Structured extraction | Schema ✅ (P1-D1…D5); extraction Phase 6 |
-| 5.7 | Evidence and provenance | Model ✅ (P1-D6, P1-D7); populated Phase 6 |
-| 5.8 | Deterministic validation | Invariants ✅ (P1-D2, P1-D5); normalizers Phase 6 |
-| 5.9 | Change detection | Storage contract and revalidation ✅ (P1.5-D1, P2-D11); diff Phase 7 |
-| 5.10 | HITL | Triggers ✅ (P1-D15, P1.5-D4, P3-D4, P3-D18); reviewer interface Phase 7 |
-| 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
-| 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
+| 5.5 | Chunking and RAG | ✅ P5-D1…D10, P7-D13 — chunking, weighted RRF, the lexical relevance gate, query terms corrected against the corpus |
+| 5.6 | Structured extraction | ✅ P1-D1…D5, P6-D1…D16, P7-D12 — grouped calls, response_schema at temperature 0, quote verification |
+| 5.7 | Evidence and provenance | ✅ P1-D6, P1-D7, P6-D2…D4, P7-D4, P7-D12 — every value carries a verified quote and its source |
+| 5.8 | Deterministic validation | ✅ P1-D2, P1-D5, P6-D5…D6, P7-D9, P7-D10 — normalizers, range checks, conflict detection |
+| 5.9 | Change detection | ✅ P1.5-D1, P2-D11, P7-D1…D4, P7-D8 — snapshots, normalized diff, per-kind magnitude, provenance |
+| 5.10 | HITL | ✅ P1-D15, P1.5-D4, P3-D4, P7-D5…D7 — configurable triggers, a reviewer Protocol, decisions remembered by subject |
+| 5.11 | Error handling | ✅ network, 404, robots and discovery failures (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21); unreadable documents (P4-D2, P4-D4 — quality gate with explicit fatal defects); Gemini/API failure and invalid structured output (`ExtractionError` after the permitted attempts, P6-D10 — a run fails rather than reports a guess); irrelevant retrieval (P5-D7, the relevance gate); no previous snapshot (P7-D8) |
+| 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). prompt-injection defence ✅ (P6-D9 — passage text is stated to be data, never instructions, and the model is shown numbered passages with no URLs, paths or carried-over instructions). **Missing:** least-privilege *tool* design, which only exists once the tools do (Phase 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 366 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 374 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |
