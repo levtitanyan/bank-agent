@@ -395,3 +395,48 @@ def test_a_changed_prompt_invalidates_cached_answers(tmp_path) -> None:  # type:
     assert first != cache_key(specs, [chunk(TERM_PASSAGE, "c002")], "model-a"), (
         "the passages are part of the key"
     )
+
+
+def test_from_cache_describes_this_run_not_the_extractor_s_history(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """«This run cost nothing» is the claim, so it must be measured per run."""
+    from tariff_agent.extraction.cache import CachedExtractor
+
+    chunks = [chunk(RATE_PASSAGE, "c001")]
+    answer = ExtractedField(
+        field_id="nominal_rate",
+        value="13.5%",
+        quote="Տարեկան անվանական տոկոսադրույք՝ 13.5%",
+        chunk_id="c001",
+    )
+    cached = CachedExtractor(ScriptedExtractor({"nominal_rate": answer}), tmp_path)
+
+    first = extract_tariffs(PRODUCT, "ACBA Bank", Retriever(chunks), cached, ALLOWLIST)
+    assert first.from_cache is False
+
+    # The same extractor object, whose lifetime counters now hold those misses.
+    second = extract_tariffs(PRODUCT, "ACBA Bank", Retriever(chunks), cached, ALLOWLIST)
+    assert second.model_calls == 0
+    assert second.from_cache is True
+
+
+def test_a_url_encoded_filename_is_decoded_for_the_reader() -> None:
+    """«loan%20info.pdf» is what a PDF without a title looks like in a report."""
+    import dataclasses
+
+    encoded = dataclasses.replace(
+        chunk(RATE_PASSAGE, "c001"), document_name="loan%20info.pdf"
+    )
+    extractor = ScriptedExtractor(
+        {
+            "nominal_rate": ExtractedField(
+                field_id="nominal_rate",
+                value="13.5%",
+                quote="Տարեկան անվանական տոկոսադրույք՝ 13.5%",
+                chunk_id="c001",
+            )
+        }
+    )
+    outcome = extract_tariffs(PRODUCT, "ACBA Bank", Retriever([encoded]), extractor, ALLOWLIST)
+    evidence = outcome.extraction.fields["nominal_rate"].evidence
+    assert evidence is not None
+    assert evidence.document_name == "loan info.pdf"

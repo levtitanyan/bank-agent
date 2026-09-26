@@ -151,6 +151,13 @@ def _disagree(primary: FieldValue, supporting: FieldValue) -> bool:
     if left is None or right is None:
         return _normalize_text(primary.value) != _normalize_text(supporting.value)
 
+    # A fee of «0%» and a fee of «չի գանձվում» are the same fee. The normalizer
+    # records them differently - one as a percentage, one as an explicit absence
+    # of charge - and comparing the mappings reported the bank as contradicting
+    # itself when both sources said the customer pays nothing.
+    if _is_zero_charge(left) and _is_zero_charge(right):
+        return False
+
     for low_key, high_key in (("min", "max"), ("min_months", "max_months")):
         low_a, high_a = left.get(low_key), left.get(high_key)
         low_b, high_b = right.get(low_key), right.get(high_key)
@@ -162,6 +169,24 @@ def _disagree(primary: FieldValue, supporting: FieldValue) -> bool:
     if "text" in left and "text" in right:
         return str(left["text"]) != str(right["text"])
     return left != right
+
+
+def _is_zero_charge(normalized: dict[str, Any]) -> bool:
+    """Whether a normalized fee means "nothing is charged".
+
+    Args:
+        normalized: The normalized value.
+
+    Returns:
+        True for an explicit absence of charge and for a zero percentage or
+        amount, which are the same fact written two ways.
+    """
+    if normalized.get("kind") == "none":
+        return True
+    low, high = normalized.get("min"), normalized.get("max")
+    if isinstance(low, int | float) and isinstance(high, int | float):
+        return low == 0.0 and high == 0.0
+    return False
 
 
 def _disjoint(low_a: float, high_a: float, low_b: float, high_b: float) -> bool:

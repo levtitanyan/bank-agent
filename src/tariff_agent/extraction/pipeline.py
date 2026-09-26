@@ -109,6 +109,8 @@ def extract_tariffs(
     }
     fields: dict[str, FieldValue] = {}
     calls_before = getattr(extractor, "calls", 0)
+    hits_before = getattr(extractor, "cache_hits", 0)
+    misses_before = getattr(extractor, "cache_misses", 0)
     attempted = 0
     failures = 0
 
@@ -185,7 +187,7 @@ def extract_tariffs(
     extraction = TariffExtraction(
         bank=bank,
         product_id=product.id,
-        document_name=(
+        document_name=_readable_name(
             primary_document.document_name
             if primary_document
             else (primary_source.document_name if primary_source else product.name_en)
@@ -224,7 +226,14 @@ def extract_tariffs(
         conflicts=conflicts,
         retrieval=retrieval,
         model_calls=getattr(extractor, "calls", 0) - calls_before,
-        from_cache=bool(getattr(extractor, "served_from_cache", False)),
+        # Measured across this run only. Asking the extractor whether it has
+        # *ever* served from cache made a run that asked nothing report
+        # from_cache=False, because an earlier run on the same object had
+        # missed - and "this run cost nothing" is the claim being made.
+        from_cache=(
+            getattr(extractor, "cache_hits", 0) - hits_before > 0
+            and getattr(extractor, "cache_misses", 0) - misses_before == 0
+        ),
     )
 
 
@@ -313,6 +322,25 @@ def _build_variants(
     return tuple(variants)
 
 
+def _readable_name(name: str) -> str:
+    """Make a document name fit to show a reader.
+
+    A URL-encoded filename - «loan%20info.pdf» - is what a fallback title looks
+    like when a PDF carries no metadata title of its own. Decoding it is the
+    difference between a report that looks machine-generated and one that looks
+    read.
+
+    Args:
+        name: The document name as recorded.
+
+    Returns:
+        The name with percent-encoding decoded.
+    """
+    from urllib.parse import unquote
+
+    return unquote(name)
+
+
 def _evidence_from(chunk: Chunk, quote: str) -> Evidence:
     """Build evidence pointing at the passage a quote was verified against.
 
@@ -325,7 +353,7 @@ def _evidence_from(chunk: Chunk, quote: str) -> Evidence:
         have none, rather than a plausible "page 1".
     """
     return Evidence(
-        document_name=chunk.document_name,
+        document_name=_readable_name(chunk.document_name),
         source_url=HttpUrl(chunk.source_url),
         page=chunk.evidence_page,
         section=chunk.section,
@@ -414,6 +442,7 @@ def _find_conflicts(
             if extraction.fields[field_id].status is FieldStatus.FOUND
             and retrieval[field_id].supporting
             and FIELDS_BY_ID[field_id].kind is not ValueKind.TEXT
+            and not _came_from_supporting(extraction.fields[field_id], retrieval[field_id])
         ]
         if not checkable:
             continue
@@ -450,6 +479,32 @@ def _find_conflicts(
             if conflict is not None:
                 conflicts.append(conflict)
     return conflicts
+
+
+def _came_from_supporting(value: FieldValue, retrieval: FieldRetrieval) -> bool:
+    """Whether a field's value was already read from a supporting source.
+
+    The model is shown primary and supporting passages together, so a value can
+    legitimately come from the shared tariff book - that is where most of the
+    consumer loan's fees are published. Re-reading the supporting passages and
+    comparing would then be asking one source whether it agrees with itself,
+    and any wording difference between two readings of the same sentence would
+    be reported as the bank contradicting itself.
+
+    Args:
+        value: The extracted value.
+        retrieval: What was retrieved for that field.
+
+    Returns:
+        True when the value's evidence points at a supporting passage.
+    """
+    if value.evidence is None:
+        return False
+    quote = " ".join(value.evidence.quote.split())
+    for scored in retrieval.supporting:
+        if quote and quote in " ".join(scored.chunk.text.split()):
+            return True
+    return False
 
 
 def _supporting_passages(

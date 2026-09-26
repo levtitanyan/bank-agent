@@ -560,3 +560,29 @@ def test_a_variant_inside_the_headline_range_is_accepted() -> None:
     validated, report = validate_extraction(build_extraction(nominal_rate=value), ALLOWLIST)
     assert validated.fields["nominal_rate"].status is FieldStatus.FOUND
     assert report.is_valid
+
+
+def test_a_fee_of_zero_and_a_fee_not_charged_are_not_a_conflict() -> None:
+    """«0%» and «չի գանձվում» are the same fee written two ways.
+
+    The normalizer records one as a percentage and the other as an explicit
+    absence of charge, and comparing the mappings reported the bank as
+    contradicting itself while both sources said the customer pays nothing.
+    Seen live on the mortgage summary against its product page.
+    """
+    assert (
+        detect_conflict(
+            "service_fee",
+            found("0%", ValueKind.FEE),
+            found("սպասարկման միջնորդավճարներ չկան", ValueKind.FEE),
+        )
+        is None
+    )
+
+
+def test_a_real_fee_against_a_free_one_is_still_a_conflict() -> None:
+    """The zero-equivalence must not swallow a genuine disagreement."""
+    conflict = detect_conflict(
+        "service_fee", found("0.5% ամսական", ValueKind.FEE), found("չի գանձվում", ValueKind.FEE)
+    )
+    assert conflict is not None
