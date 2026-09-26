@@ -1099,6 +1099,45 @@ answers, which is why it is recorded here rather than slipped in — and it is w
 afterwards rather than assuming.
 
 
+### P6-D16 · The prompt took four versions, and the third was worse
+**Requirement:** 5.6 · 5.14 · **File:** [`extraction/prompt.py`](../src/tariff_agent/extraction/prompt.py)
+
+Each version was a change to the instructions alone - same documents, same model, same
+retrieval - and each was measured the same way, so the numbers are comparable.
+
+| version | change | fields found |
+|---|---|---|
+| v1 | the original instructions | 14/20 |
+| v2 | an explicitly stated absence of a charge is a **value of zero**, not a missing field | 16/20 |
+| v2 + OCR margin | (not a prompt change; see P4-D14) | 17/20 |
+| **v3** | **naming the product, and refusing values that cannot be attributed to it** | **16/20** |
+| v4 | the same rule, narrowed to passages that list several products | **17/20** |
+
+**v2** fixed a real misreading. Four of six NOT_FOUND results were passages in which the bank
+states that a fee is *not charged*, and the model read that as silence. «The bank charges
+nothing» and «we do not know what the bank charges» are different facts, and the sentinel
+exists to keep them apart.
+
+**v3 is the interesting one.** It was written to prevent a demonstrated failure: one model had
+answered «ՀՀ դրամ, ԱՄՆ դոլար, եվրո, ՌԴ ռուբլի» for a single loan, four currencies belonging to
+the shared tariff book. The rule told the model to name the product and, if it could not tell
+which product a value belonged to, to answer NOT_FOUND rather than report another product's
+terms. That reads like exactly the right safety rule. It cost a field — the consumer loan's
+currency, stated plainly on the product's *own* page as «Արժույթ ՀՀ դրամ», came back missing.
+Told to be careful about attribution, the model became careful everywhere.
+
+**v4** keeps the intent and removes the over-reach: the rule now addresses the case it was
+written for - a passage giving values for several products - and adds the sentence the
+cautious version lacked, that *a value stated for the named product is valid wherever it
+appears, including in a shared document, where most of this product's fees are published*.
+
+The general lesson is not "write better prompts". It is that a prompt rule which sounds
+correct can suppress correct answers far from the case it targets, and the only way to know is
+to measure the same fields before and after. Four of the five changes in this table were
+verified against hand-checked values on the live pages; the one that was not would have shipped
+a regression.
+
+
 # Tooling decisions
 
 ### T-D1 · mypy strict on `src` only
@@ -1160,5 +1199,5 @@ review instead:
 | 5.11 | Error handling | 🟡 network, 404, robots, discovery failures ✅ (P1-D14, P2-D8…D10, P2-D20, P3-D9, P3-D21). **Missing:** document parse/OCR failure (Phase 4), Gemini/API failure and invalid structured output (Phase 6), irrelevant RAG retrieval (Phase 5), previous snapshot unavailable (Phase 7) |
 | 5.12 | Security | 🟡 allowlist, redirects, size and type caps, robots, XML safety, secret handling ✅ (P1-D9…D12, P2-D2, P2-D4…D7, P2-D16, P2-D17, P3-D8). **Missing:** least-privilege *tool* design and prompt-injection defence, which only exist once tools and prompts do (Phases 6, 8) |
 | 5.13 | Observability | 🟡 structured logs, per-run log files, run correlation, per-decision reasons ✅ (P1-D16, P3-D5, P3-D12). **Missing:** the run metrics themselves — execution time, tool failure rate, extraction completeness, validation failures, HITL rate, token usage (Phases 8, 9) |
-| 5.14 | Testing | 🟡 326 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
+| 5.14 | Testing | 🟡 366 tests over every deterministic component built so far ✅ (P2-D15, P3-D23). **Missing:** the evaluation dataset and its results (Phase 9) |
 | 5.15 | Python engineering | ✅ P1-D18, P1-D19, T-D1 — structure, type hints, config, logging, tests, pyproject, README, git history |
