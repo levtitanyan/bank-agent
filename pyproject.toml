@@ -32,6 +32,9 @@ dependencies = [
     "typer>=0.12",
 ]
 
+[project.scripts]
+tariff-agent = "tariff_agent.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

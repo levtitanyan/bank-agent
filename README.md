@@ -8,15 +8,18 @@ escalating to a human when it cannot decide safely.
 
 Python 3.11 · Google ADK · Gemini
 
-> **Status: Phase 7 of 9.** A fuzzy product name resolves to a product, to its official ACBA
+> **Status: Phase 8 of 9.** A fuzzy product name resolves to a product, to its official ACBA
 > sources; those are parsed into clean pages, tables and sections, indexed, and read by Gemini
 > into the ten tariff fields — each carrying a quote verified against the passage it came
 > from, normalized deterministically, and validated. Runs are stored as snapshots and diffed
 > against the previous one, and anything large, conflicting or ambiguous stops for a human
 > whose decision is remembered.
 >
-> **17 of 20 fields found** across two products, stable across consecutive runs; 374 tests.
-> The ADK agent and CLI (Phase 8) and the evaluation dataset (Phase 9) are not built yet.
+> An ADK agent reaches the same parts through six tools and decides which steps a question
+> needs; a CLI exposes both paths.
+>
+> **17 of 20 fields found** across two products, stable across consecutive runs; 407 tests.
+> The evaluation dataset and demos (Phase 9) are not built yet.
 > See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap, and
 > [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what it gets wrong.
 
@@ -69,6 +72,19 @@ human-in-the-loop review · two controlled failures (404 and timeout).
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Every design decision by phase: options considered, why this one, which requirement it serves |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | What the system gets wrong, what it has not measured, and each unfound field accounted for individually |
 | [docs/PROGRESS_REPORT.md](docs/PROGRESS_REPORT.md) | A phase-by-phase report of what was built, what running it live revealed, and requirement coverage |
+
+## Using it
+
+```bash
+tariff-agent run "потребительский кредит"     # one product, deterministic, prints the report
+tariff-agent monitor --json                   # the whole catalogue: the scheduled path
+tariff-agent snapshots list consumer_loan     # history, offline
+tariff-agent snapshots show 12                # one snapshot's values and their evidence
+tariff-agent agent "Ի՞նչ է սպառողական վարկի տոկոսադրույքը:"   # the model picks the steps
+```
+
+`--json` goes to stdout and logs to stderr, so output stays parseable. Exit codes: `0` fine,
+`1` a run failed, `2` a bad request, `3` something needs a human.
 
 ## Ground rules this project follows
 

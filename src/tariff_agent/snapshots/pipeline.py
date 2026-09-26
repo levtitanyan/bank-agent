@@ -131,7 +131,7 @@ def run_monitoring(
             },
         )
 
-    requests = _review_requests(product.id, diff, outcome.conflicts, monitoring)
+    requests = review_requests(product.id, diff, outcome.conflicts, monitoring)
     status = SnapshotStatus.PENDING_REVIEW if requests else SnapshotStatus.STORED
 
     # Stored first, deliberately: the record of what the bank published must not
@@ -146,7 +146,7 @@ def run_monitoring(
             result = ask(reviewer, log, request, snapshot_id=snapshot_id)
             reviews.append((request, result))
             decisions.append(result.decision)
-        status = _resolve(store, snapshot_id, decisions)
+        status = resolve_status(store, snapshot_id, decisions)
 
     note = next((outcome_.note for _, outcome_ in reviews if outcome_.note), None)
     report = render_report(outcome, diff=diff, status=status, review_note=note)
@@ -186,13 +186,17 @@ def _run_id() -> str:
     return current_run_id() or new_run_id()
 
 
-def _review_requests(
+def review_requests(
     product_id: str,
     diff: SnapshotDiff,
     conflicts: list[FieldConflict],
     monitoring: MonitoringConfig,
 ) -> list[ReviewRequest]:
     """Decide what, if anything, a human must settle.
+
+    Public because the agent tools in Phase 8 must raise the *same* questions
+    this pipeline raises. Two copies of the review policy would drift, and the
+    one that drifted would be the one nobody ran nightly.
 
     Args:
         product_id: The product.
@@ -271,10 +275,13 @@ def _large_change_request(product_id: str, change: FieldChange) -> ReviewRequest
     )
 
 
-def _resolve(
+def resolve_status(
     store: SnapshotStore, snapshot_id: int, decisions: list[Decision]
 ) -> SnapshotStatus:
     """Apply the reviewer's decisions to the stored snapshot.
+
+    Public for the same reason as :func:`review_requests`: the agent resolves a
+    snapshot exactly as the scheduled run does.
 
     Args:
         store: Where the snapshot lives.

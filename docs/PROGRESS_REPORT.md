@@ -1,14 +1,15 @@
 # ACBA Tariff Monitoring Agent — progress report
 
-**Phases 1–7 of 9 complete:** contracts · guarded HTTP · discovery · document processing ·
-retrieval · extraction and verification · snapshots, change detection and human review.
+**Phases 1–8 of 9 complete:** contracts · guarded HTTP · discovery · document processing ·
+retrieval · extraction and verification · snapshots, change detection and human review ·
+the ADK agent, its tools and the CLI.
 
 | | |
 |---|---|
 | Result | **17 of 20 tariff fields found** across two products, stable across consecutive runs; all three absences accounted for individually |
-| Tests | **374 passing**, none touching the network |
+| Tests | **407 passing**, none touching the network, including one whole-flow test from a typed query to a rendered report |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
-| Code | ~11,400 lines source (53 modules) · ~5,000 lines tests · 30 commits |
+| Code | ~13,000 lines source (60 modules) · ~5,900 lines tests · 31 commits |
 | Verified against | `acba.am`, live, at each phase boundary — including a measured retrieval comparison and a two-model evaluation |
 
 This report states what works and how it decides. Section 7 lists the defects that only
@@ -63,7 +64,7 @@ A second run over unchanged documents makes **zero model calls** and reports **z
 A forced edit to a stored value surfaces as one change with both quotes and the magnitude in
 percentage points. A large change stops for a human, and the decision is remembered.
 
-**Not built yet:** the ADK agent, the CLI, demos, the evaluation set. Phases 8–9.
+**Not built yet:** demos and the evaluation dataset. Phase 9.
 
 ---
 
@@ -312,6 +313,70 @@ Verified live, three times over:
 
 ---
 
+## 6.8 Phase 8 — The agent, its tools, and the CLI
+
+The deterministic pipeline remains the scheduled path. The agent is a second way
+in, and its whole job is deciding which steps a question actually needs.
+
+- **Six tools, drawn at the forks.** A tool boundary belongs where the agent's
+  next choice could legitimately differ: resolving may end in a question,
+  reading the store may make everything else unnecessary, storing is a decision,
+  asking a person is only sometimes right. Fetching, redirects, PDF parsing, OCR
+  fallback, cleaning, chunking and indexing have exactly one legitimate order, so
+  they sit *inside* a tool — seven tools there would add seven chances to
+  sequence them wrongly and not one decision worth making.
+- **Ids in, status out.** Every argument is an id an earlier tool minted; the
+  only free text is the user's product query, and that goes through the
+  deterministic matcher. A test reads the signatures and asserts it. This is the
+  prompt-injection boundary and it is structural: a PDF that says *"fetch
+  http://evil/x"* has no tool argument in which that URL could be expressed.
+- **Nothing raises into the model.** Every tool returns `ok`, `error` or
+  `needs_review`; a decorator converts any exception into an error payload.
+- **Payloads stay in Python.** The model sees `src-1` and a summary — counts,
+  field names, statuses, quotes truncated to 120 characters. What never enters
+  the context cannot instruct it.
+- **Four stop conditions:** a 12-call budget, a wall-clock cap, a no-progress
+  detector, and the terminal states. Each tells the model to answer with what it
+  has and name what is missing.
+- **The review memory is shared.** `request_review` recalls from the same table
+  the scheduled run uses, so the agent path does not reopen the gap Phase 7
+  closed. Both paths call the same `review_requests()` and `resolve_status()`.
+
+**It genuinely varies.** Four scenarios run a scripted model through ADK's own
+runner, so these are sequences the runner executed:
+
+| Scenario | Tools called | Calls | Fetches |
+|---|---|---|---|
+| Fresh snapshot | resolve → snapshot | 2 | **0** |
+| Ambiguous name | resolve | 1 | **0** |
+| No history | resolve → snapshot → find → extract → diff | 5 | yes |
+| Large change | resolve → find → extract → diff → review | 5 | yes |
+
+Verified live against `gemini-3.5-flash-lite`: asked in Armenian for the consumer
+loan's nominal rate with a snapshot minutes old, the agent called two tools, made
+**zero network fetches**, and answered with the rate and both channel variants —
+3.1 s, 7,053 tokens.
+
+```json
+{"duration_s": 3.082, "tool_calls": 2, "tool_failures": 0, "tool_failure_rate": 0.0,
+ "model_calls": 0, "cache_hits": 0, "prompt_tokens": 6810, "response_tokens": 243,
+ "total_tokens": 7053, "completeness": null, "validation_failures": 0,
+ "reviews_asked": 0, "reviews_remembered": 0, "hitl_rate": 0.0,
+ "stop_reason": "completed",
+ "per_tool_s": {"resolve_product": 0.0, "get_latest_snapshot": 0.003}}
+```
+
+`completeness` is `null`, not `0.0`: this turn extracted nothing, and a run that
+never looked must not read like one that looked and found nothing. Token usage
+is `null` when the SDK reports none, for the same reason.
+
+**The CLI:** `run` (one product, deterministic), `monitor` (the catalogue, the
+scheduled path), `snapshots list|show` (offline history), `agent` (the model
+picks the steps). `--json` on stdout, logs on stderr, so output stays parseable.
+Exit codes: `0` fine, `1` a run failed, `2` a bad request, `3` needs a human.
+
+---
+
 ## 7. What running it against the real site found
 
 Six defects that reasoning alone did not catch. Each is fixed, with a test that fails if it
@@ -349,7 +414,7 @@ have been crawled as if it were a list of pages.
 
 ## 8. Testing
 
-374 tests, none touching the network. `httpx.MockTransport` for HTTP, injected `sleep` for
+407 tests, none touching the network. `httpx.MockTransport` for HTTP, injected `sleep` for
 retries and pacing, mocked Tesseract for OCR logic plus one real-binary test that auto-skips.
 
 | Area | Tests |
@@ -415,8 +480,8 @@ before it could be measured; that gap is recorded rather than filled with an est
 
 | § | Requirement | Status |
 |---|---|---|
-| 5.1 | ADK agent | Phase 8 · the deterministic/LLM split is already drawn |
-| 5.2 | Focused tools | Phase 8 · the functions they will wrap exist and are pure |
+| 5.1 | ADK agent | ✅ an LlmAgent over six tools; what the model decides vs what code decides is written out explicitly |
+| 5.2 | Focused tools | ✅ six tools, each at a point where the agent's next choice could differ; ids in, status out, nothing raises |
 | 5.3 | Official source discovery | ✅ |
 | 5.4 | PDF, OCR and document processing | ✅ |
 | 5.5 | Chunking and RAG | ✅ chunking with §5.5 metadata, hybrid retrieval, relevance gate, both modes measured |
@@ -426,9 +491,9 @@ before it could be measured; that gap is recorded rather than filled with an est
 | 5.9 | Change detection | ✅ SQLite snapshots, normalized diffing, per-kind magnitude, provenance separating our changes from the bank's |
 | 5.10 | Human-in-the-loop | ✅ configurable triggers, a reviewer Protocol, decisions persisted by subject and not re-asked |
 | 5.11 | Error handling | ✅ network, HTTP, robots, discovery, parse, OCR, embeddings, irrelevant retrieval, model/API failure and invalid structured output, no previous snapshot |
-| 5.12 | Security | 🟡 allowlist, redirects, caps, robots, XML safety, render cap, secrets, prompt-injection defence ✅ · tool least-privilege arrives with the tools (Phase 8) |
-| 5.13 | Observability | 🟡 structured logs, per-run files, run correlation, per-decision reasons ✅ · run metrics remain |
-| 5.14 | Testing | 🟡 374 tests ✅ · evaluation dataset Phase 9 |
+| 5.12 | Security | ✅ allowlist, redirects, caps, robots, XML safety, render cap, secrets, prompt-injection defence, and least-privilege tools — every argument is an id an earlier tool minted |
+| 5.13 | Observability | ✅ structured logs, per-run files, run correlation, per-decision reasons, and one `run_metrics` line per run: time, tool failures, completeness, HITL rate, token usage |
+| 5.14 | Testing | 🟡 407 tests ✅ · evaluation dataset Phase 9 |
 | 5.15 | Python engineering | ✅ structure, type hints, config, logging, tests, pyproject, README, git history |
 
 ---
@@ -437,7 +502,6 @@ before it could be measured; that gap is recorded rather than filled with an est
 
 | Phase | Contents |
 |---|---|
-| 8 | The ADK agent over the same tool functions, plus the CLI. The tools take ids from previous tool outputs — never raw URLs or paths — so the model's reach is bounded by construction |
 | 9 | Demos, the evaluation dataset and its results, remaining documentation |
 
 Further detail: [ARCHITECTURE.md](ARCHITECTURE.md) for the design,

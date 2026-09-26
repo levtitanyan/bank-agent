@@ -3,17 +3,21 @@
 How the ACBA tariff monitoring agent is put together: the modules, the order they
 run in, and the decisions behind them.
 
-> **Current state: Phase 7 of 9.** The pipeline runs end to end against the live site: a
+> **Current state: Phase 8 of 9.** The pipeline runs end to end against the live site: a
 > fuzzy product name resolves to a product, to its official ACBA sources; those are fetched,
 > parsed, cleaned and indexed; Gemini extracts each tariff field from retrieved passages;
 > every quote is verified against the passage it was attributed to; values are normalized and
 > validated; a snapshot is stored, diffed against the previous one, and anything large,
 > conflicting or ambiguous stops for a human whose decision is remembered.
 >
-> **Measured:** 17 of 20 fields found across two products, stable across consecutive runs,
-> with all three absences accounted for in [`LIMITATIONS.md`](LIMITATIONS.md). 374 tests.
+> An ADK agent reaches the same parts through six tools and decides for itself which steps a
+> question needs; a CLI exposes both paths.
 >
-> **Not built:** the ADK agent and CLI (Phase 8), the evaluation dataset and demos (Phase 9).
+> **Measured:** 17 of 20 fields found across two products, stable across consecutive runs,
+> with all three absences accounted for in [`LIMITATIONS.md`](LIMITATIONS.md). 407 tests,
+> including one whole-flow test from a typed query to a rendered report.
+>
+> **Not built:** the evaluation dataset and demos (Phase 9).
 > Sections marked *(Phase N)* name the phase that built them; anything describing a later
 > phase is written in the future tense.
 
@@ -120,6 +124,13 @@ src/tariff_agent/
     review.py                  the Reviewer Protocol, and a decision log keyed by subject
     report.py                  what a business user reads: values, evidence, what moved
     pipeline.py                the façade: extract -> store -> diff -> review -> report
+  agent/
+    tools.py                   the six things the model can do, and nothing else
+    session.py                 ids, payloads the model never sees, and the budget
+    metrics.py                 what the run cost: time, failures, completeness, tokens
+    agent.py                   the LlmAgent, its instruction, and one turn
+  pipeline.py                  the deterministic run: load sources, monitor, report
+  cli.py                       run · monitor · snapshots · agent
   observability/logging.py     single-line JSON logs with a per-run correlation id
 tests/
   test_phase1_contracts.py     52 tests: registry, config, invariants, migration, run logs
@@ -137,6 +148,8 @@ tests/
   test_extraction_units.py     52 tests: normalizing, verifying, validating, conflicts
   test_extraction_pipeline.py  17 tests: the whole extraction path against a fake model
   test_snapshots.py            29 tests: storing, diffing, significance, review, the report
+  test_agent.py                22 tests: the tool contract, stop conditions, four scenarios
+  test_cli.py                  11 tests: the commands, and one whole flow query -> report
   fixtures/                    trimmed REAL ACBA pages + synthetic PDFs reproducing defects
 data/samples/ocr/              a real ACBA page rendered to an image, for the OCR test
 ```
@@ -254,7 +267,7 @@ product), rapidfuzz `token_set_ratio` absorbs the *typos, word order and extra w
 literally contains "mortgage" and scores 100 against it. Bands: ≥85 with a ≥10 lead resolves;
 60–85 or a close race is `AMBIGUOUS` and goes to a human; below 60 is `NOT_FOUND`. It returns
 a status object rather than raising, because the ambiguous case carries the data a reviewer
-needs and Phase 8 tools must hand the model a status, never an exception.
+needs and the agent's tools hand the model a status, never an exception.
 
 **`sitemap.py`** — parsed with `defusedxml`, not lxml: stock XML parsers expand entities, and
 a "billion laughs" document is a few hundred bytes on the wire and gigabytes in memory. Every
@@ -366,9 +379,11 @@ string-matching English: `ConfigError`, `FetchError`, `DomainNotAllowedError`,
 correctly refusing to decide alone (two plausible PDFs, a 12.5% → 18% jump, unreadable
 OCR). `reason` is machine-readable; `details` carries the evidence the reviewer needs.
 
-*(Phase 8)* Tool wrappers turn these into `{"status": "error", "error_type": ..., "message": ...}`
-results, so the model sees a controlled failure — never a traceback, never fabricated data
-standing in for a failure.
+*(Phase 8)* The tool decorator in [`agent/tools.py`](../src/tariff_agent/agent/tools.py) turns
+every one of these into `{"status": "error", "error_type": ..., "message": ...}`, so the model
+sees a controlled failure it can route around — never a traceback, never fabricated data
+standing in for a failure. `needs_review` is a third status, not a kind of error: "a person
+must decide this" is not a failure.
 
 ### `observability/logging.py` — the audit trail
 
@@ -437,5 +452,5 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 | 5 | Chunking + hybrid BM25/embedding RAG | ✅ |
 | 6 | Gemini structured extraction + deterministic validation | ✅ |
 | 7 | Snapshots, normalized diffing, human-in-the-loop | ✅ |
-| 8 | ADK agent, pipeline, CLI | next |
-| 9 | Demos, evaluation dataset, remaining docs | |
+| 8 | ADK agent, pipeline, CLI | ✅ |
+| 9 | Demos, evaluation dataset, remaining docs | next |
