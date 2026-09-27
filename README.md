@@ -6,45 +6,25 @@ ACBA document, extracts the ten tariff fields **with a source quote for each**, 
 them deterministically, stores a snapshot, and reports what changed since the last run —
 escalating to a human when it cannot decide safely.
 
-Python 3.11 · Google ADK · Gemini
+Python 3.11 / 3.12 · Google ADK · Gemini
 
-> **Status: complete — phases 1–9.** A fuzzy product name resolves to a product, to its official ACBA
-> sources; those are parsed into clean pages, tables and sections, indexed, and read by Gemini
-> into the ten tariff fields — each carrying a quote verified against the passage it came
-> from, normalized deterministically, and validated. Runs are stored as snapshots and diffed
-> against the previous one, and anything large, conflicting or ambiguous stops for a human
-> whose decision is remembered.
+> **Complete.** Two ways in: a deterministic pipeline for the schedule, and an ADK agent that
+> reaches the same parts through six tools and decides which steps a question needs. Built in
+> nine phases, so [DECISIONS.md](docs/DECISIONS.md) is indexed by them and an id like `P8-D4`
+> names a phase and a decision within it.
 >
-> An ADK agent reaches the same parts through six tools and decides which steps a question
-> needs; a CLI exposes both paths.
+> **14 of 20 tariff fields found** live. That number alone is misleading, so here is all twenty:
 >
-> **14 of 20 tariff fields found** through the path a reviewer actually runs. That number
-> alone is misleading, so here is all twenty:
->
-> | | Fields | |
+> | | Fields | Which |
 > |---|---|---|
 > | Found, with a verified quote | **14** | |
-> | The bank does not state them | **3** | consumer `application_fee`, mortgage `disbursement_fee`, mortgage `salary_privileges` — each with its evidence in [LIMITATIONS §1](docs/LIMITATIONS.md) |
-> | We failed to report them | **3** | both products' `service_fee`, and mortgage `nominal_rate` downgraded to `unverified` |
+> | The bank does not state them | **3** | consumer `application_fee`, mortgage `disbursement_fee`, mortgage `salary_privileges` |
+> | We failed to report them | **3** | both products' `service_fee`, mortgage `nominal_rate` |
 >
-> The last row is one cause, and it is not the model: discovery returns more documents than the
-> two authoritative ones, `top_k` is four passages **per source role** rather than per document,
-> and the passages that answer `service_fee` get displaced by documents that merely mention
-> fees. Raising `top_k` for the supporting role, or capping the supporting set by score instead
-> of by count, would close it — [LIMITATIONS §2.5](docs/LIMITATIONS.md).
->
-> | Configuration | Found |
-> |---|---|
-> | The two authoritative documents supplied directly | 17 / 20 |
-> | Discovery + BM25-only retrieval | 15 / 20 |
-> | Discovery + hybrid retrieval — **the default, and what the numbers above describe** | 14 / 20 |
->
-> The comparison is the finding; the single number is not. Hybrid scoring *below* BM25-only is
-> consistent with [P5-D14](docs/DECISIONS.md), which measured semantic ranking as buying nothing
-> on this corpus. Measured by [eval/results-live.md](eval/results-live.md). 431 tests.
-> Five runnable demos and an 18-item evaluation set are in [demos/](demos/) and [eval/](eval/).
-> See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap, and
-> [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what it gets wrong.
+> The cause of the last row, the evidence for the middle one, and the same result at three
+> retrieval configurations are all under [Results](#results). 431 tests · five demos in
+> [demos/](demos/) · an 18-item evaluation set in [eval/](eval/) ·
+> [what it gets wrong](docs/LIMITATIONS.md).
 
 ---
 
@@ -52,15 +32,21 @@ Python 3.11 · Google ADK · Gemini
 
 ### 1 · Setup
 
+Requires **Python 3.11 or 3.12** — 3.13+ has no reliable PyMuPDF or google-adk wheels yet.
+
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env                      # add GOOGLE_API_KEY for the agent
-brew install tesseract tesseract-lang     # OCR with Armenian; macOS
+cp .env.example .env                                 # add GOOGLE_API_KEY for the agent
+
+# OCR, with Armenian
+brew install tesseract tesseract-lang                # macOS
+sudo apt install tesseract-ocr tesseract-ocr-hye     # Debian / Ubuntu
 ```
 
-*Without a key everything below still works except the two agent commands, which refuse with
-a message rather than failing.*
+*`.env` is gitignored; `.env.example` is the committed template and holds no secrets. Without
+a key everything below still works except the two agent commands, which refuse with a message
+rather than failing.*
 
 ### 2 · The chat UI — the primary demo
 
@@ -119,24 +105,6 @@ python eval/run_eval.py --live        # the same items against acba.am → eval/
 
 *You will see 18/18 offline. The live run asserts product resolution and reports field values,
 because a tariff changing is the thing this system exists to notice, not a regression in it.*
-
----
-
-## Setup
-
-Requires **Python 3.11 or 3.12** (3.13+ has no reliable PyMuPDF / google-adk wheels yet).
-
-```bash
-python3.11 -m venv .venv          # macOS with Homebrew: /opt/homebrew/bin/python3.11
-source .venv/bin/activate
-
-pip install -e ".[dev]"
-
-cp .env.example .env              # then add your AI Studio key to GOOGLE_API_KEY
-```
-
-`.env` is gitignored. `.env.example` is the committed template and holds no secrets.
-Running without a key is supported — offline demos and tests use a mock path.
 
 ## Run the checks
 
