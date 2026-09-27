@@ -109,6 +109,31 @@ conflict" is weaker evidence than it looks.
 
 ---
 
+### 2.4 The source-conflict trigger has no live example
+
+Of the five review triggers, `source_conflict` is the only one with no naturally-occurring
+instance on the live path today. It is not untested — unit tests cover it directly, and the
+offline demo raises a real one, where the current product page states 20.1–21.6% against the
+older information summary's 11.9–12.5%.
+
+Why it does not fire live on these two products:
+
+- The mortgage primary is a scan, and its rate table is the worst-damaged part of it: the
+  header reads `Արժույթ Wofwtwywt տոկոսադրույք`. No labelled currency rows survive, so there
+  is nothing to pair against the current page's rows.
+- The reported rate is a multi-currency composite — «13.75-14.5% (ՀՀ դրամ), 10.5-11.5%
+  (ԱՄՆ դոլար), 9-10% (Եվրո)» — which normalizes to a 9–14.5% span. Almost any figure the
+  other document states overlaps that, so the headline comparison passes. Per-row comparison
+  was added for exactly this, and needs both sides to label their rows.
+
+Two conflicts *did* fire during verification and both were false: the 2023 summary's «առանց …
+վճարի», rendered as «0», against the page's «անվճար» — the same fact written two ways. That
+was fixed by giving a bare zero a fee normalizer, not by suppressing the trigger.
+
+**The honest position:** the trigger works and is demonstrated offline; the live corpus does
+not currently contain a pair it can catch. A reviewer should judge it on the offline demo and
+the tests, not on a live run.
+
 ## 3. What has not been measured
 
 ### 3.1 `gemini-2.5-flash` is untested

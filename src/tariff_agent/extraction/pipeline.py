@@ -514,6 +514,10 @@ def _compare_against(
             normalized=normalize(answer.value, spec.kind),
             evidence=_evidence_from(check.chunk, answer.quote),
             status=FieldStatus.FOUND,
+            # Variants are built here too, so a per-currency rate can be
+            # compared per currency. Without them the other source offers only
+            # a headline value, and a multi-currency span overlaps everything.
+            variants=_build_variants(answer, passages, spec.kind),
         )
         ours = extraction.fields[field_id]
         # `primary` always means the authoritative document, whichever side the

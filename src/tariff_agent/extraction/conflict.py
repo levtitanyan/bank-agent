@@ -147,8 +147,38 @@ def _disagree(primary: FieldValue, supporting: FieldValue) -> bool:
         all are treated as agreeing: «17.5-21.6%» and «20.1-21.6%» describe the
         same product through different channels, not a contradiction.
     """
-    left, right = primary.normalized, supporting.normalized
+    # A rate stated per currency must be compared per currency. The mortgage
+    # reports «13.75-14.5% (ՀՀ դրամ), 10.5-11.5% (ԱՄՆ դոլար), 9-10% (Եվրո)»,
+    # which normalizes to a 9-14.5% span; against that span almost any figure
+    # the other source states overlaps, and the comparison silently passes. The
+    # AMD row belongs against the AMD row.
+    paired = _matching_variants(primary, supporting)
+    if paired:
+        return any(_values_disagree(ours, theirs) for ours, theirs in paired)
+
+    return _values_disagree(primary.normalized, supporting.normalized, primary, supporting)
+
+
+def _values_disagree(
+    left: dict[str, Any] | None,
+    right: dict[str, Any] | None,
+    primary: FieldValue | None = None,
+    supporting: FieldValue | None = None,
+) -> bool:
+    """Compare two normalized values.
+
+    Args:
+        left: The first normalized value.
+        right: The second.
+        primary: The whole field value, for the text fallback.
+        supporting: The other whole field value, for the text fallback.
+
+    Returns:
+        True when the two are incompatible.
+    """
     if left is None or right is None:
+        if primary is None or supporting is None:
+            return left != right
         return _normalize_text(primary.value) != _normalize_text(supporting.value)
 
     # A fee of «0%» and a fee of «չի գանձվում» are the same fee. The normalizer
@@ -169,6 +199,43 @@ def _disagree(primary: FieldValue, supporting: FieldValue) -> bool:
     if "text" in left and "text" in right:
         return str(left["text"]) != str(right["text"])
     return left != right
+
+
+def _fold_label(label: str) -> str:
+    """Reduce a variant label to something two documents can match on.
+
+    Args:
+        label: The label as the document writes it.
+
+    Returns:
+        Case-folded, whitespace-collapsed, punctuation-free.
+    """
+    return "".join(ch for ch in " ".join(label.split()).casefold() if ch.isalnum() or ch == " ")
+
+
+def _matching_variants(
+    primary: FieldValue, supporting: FieldValue
+) -> list[tuple[dict[str, Any] | None, dict[str, Any] | None]]:
+    """Pair up the variants both sources label the same way.
+
+    Args:
+        primary: The primary source's value.
+        supporting: The other source's value.
+
+    Returns:
+        One pair of normalized values per shared label. Empty when either side
+        states no variants or the labels do not meet, in which case the callers
+        fall back to comparing the headline values.
+    """
+    if not primary.variants or not supporting.variants:
+        return []
+    theirs = {_fold_label(v.label): v for v in supporting.variants if v.label}
+    pairs = []
+    for variant in primary.variants:
+        match = theirs.get(_fold_label(variant.label)) if variant.label else None
+        if match is not None:
+            pairs.append((variant.normalized, match.normalized))
+    return pairs
 
 
 def _is_zero_charge(normalized: dict[str, Any]) -> bool:

@@ -350,9 +350,21 @@ an application fee it never mentions was 0.687, while «Արժույթ», stated
 No floor separates them, so embeddings rank and only a lexical hit — requiring the term's
 *identifying* token — decides that an answer exists.
 
-Primary and supporting sources are searched separately, because the bank's documents disagree
-(the 2023 summary says 11.9–12.5% where the current page says 13.75–14.5%) and the extraction step has to
-see that as a conflict rather than average over it.
+Primary and supporting sources are searched separately, so that the extraction step can see a
+disagreement between two official documents rather than average over it. Each value is
+compared against the source it did *not* come from, and where both sides label their rows —
+a rate stated per currency — the comparison is made row by row, because a composite spanning
+9–14.5% overlaps almost anything.
+
+**What this currently delivers, measured.** The machinery is exercised by unit tests and fires
+genuinely in the offline demo, where the product page states 20.1–21.6% and the older
+information summary states 11.9–12.5%. On the live Gemini path, however, **these two products
+produce no naturally-occurring conflict today**, for two reasons worth naming: the mortgage
+primary's rate table is OCR-damaged (its header reads `Արժույթ Wofwtwywt տոկոսադրույք`), so no
+labelled currency rows survive to pair with; and the reported value is a multi-currency
+composite whose span overlaps whatever the older document yields. Two conflicts that did fire
+during verification turned out to be false — «0» against «անվճար», both meaning no charge —
+and were fixed rather than kept. See [`LIMITATIONS.md` §2.4](LIMITATIONS.md).
 
 ### `config.py` — split by who needs to audit it
 

@@ -44,13 +44,20 @@ CONSUMER_PAGE = "https://acba.am/hy/individual/loan/consumer-loan--up-to-10mln"
 CONSUMER_CATEGORY = "https://acba.am/hy/individual/loans/consumer-loans"
 MORTGAGE_PAGE = "https://acba.am/hy/individual/loan/purchase-mortgage"
 TARIFF_PDF = "https://www.acba.am/files/loans-tariffs.pdf"
+# The same document, as the product page actually links it. ACBA serves this
+# PDF from three URLs; content-addressing collapses them, but the fixture
+# server has to answer whichever one discovery followed.
+TARIFF_PDF_LINKED = "https://acba.am/media/uploaded/loans-tariffs.pdf"
 
 PAGES = {
     CONSUMER_PAGE: FIXTURES / "consumer_loan_10mln_page.html",
     CONSUMER_CATEGORY: FIXTURES / "consumer_loans_page.html",
     MORTGAGE_PAGE: FIXTURES / "purchase_mortgage_page.html",
 }
-PDFS = {TARIFF_PDF: DOCUMENTS / "tariff_summary.pdf"}
+PDFS = {
+    TARIFF_PDF: DOCUMENTS / "tariff_summary.pdf",
+    TARIFF_PDF_LINKED: DOCUMENTS / "tariff_summary.pdf",
+}
 
 
 BOLD, DIM, GREEN, RED, OFF = "\033[1m", "\033[2m", "\033[32m", "\033[31m", "\033[0m"

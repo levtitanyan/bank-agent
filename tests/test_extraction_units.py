@@ -15,7 +15,7 @@ from rapidfuzz import fuzz
 
 from tariff_agent.config import Allowlist
 from tariff_agent.documents.document import DocumentKind
-from tariff_agent.extraction.conflict import detect_conflict, summarize
+from tariff_agent.extraction.conflict import _disjoint, detect_conflict, summarize
 from tariff_agent.extraction.groups import FIELD_GROUPS, group_of
 from tariff_agent.extraction.normalize import normalize
 from tariff_agent.extraction.validate import validate_extraction
@@ -423,6 +423,93 @@ def test_a_real_fee_difference_is_still_a_conflict() -> None:
             "disbursement_fee",
             found("1%", ValueKind.FEE),
             found("0.5%", ValueKind.FEE),
+        )
+        is not None
+    )
+
+
+def test_a_per_currency_rate_is_compared_per_currency() -> None:
+    """A composite span compared against everything is not a comparison.
+
+    The mortgage reports three currencies at once, which normalizes to a
+    9-14.5% span. Against that span almost any figure overlaps, so a real
+    disagreement in the AMD row passed unnoticed. The AMD row belongs against
+    the AMD row.
+    """
+    ours = FieldValue(
+        value="13.75-14.5% (ՀՀ դրամ), 10.5-11.5% (ԱՄՆ դոլար)",
+        normalized=normalize("9-14.5%", ValueKind.PERCENT),
+        evidence=evidence(),
+        status=FieldStatus.FOUND,
+        variants=(
+            FieldVariant(
+                label="ՀՀ դրամ",
+                value="13.75-14.5%",
+                normalized=normalize("13.75-14.5%", ValueKind.PERCENT),
+                evidence=evidence(),
+            ),
+            FieldVariant(
+                label="ԱՄՆ դոլար",
+                value="10.5-11.5%",
+                normalized=normalize("10.5-11.5%", ValueKind.PERCENT),
+                evidence=evidence(),
+            ),
+        ),
+    )
+    theirs = FieldValue(
+        value="11.9-12.5% (ՀՀ դրամ)",
+        normalized=normalize("10-12.5%", ValueKind.PERCENT),
+        evidence=evidence(),
+        status=FieldStatus.FOUND,
+        variants=(
+            FieldVariant(
+                label="ՀՀ  Դրամ",  # spacing and case differ between documents
+                value="11.9-12.5%",
+                normalized=normalize("11.9-12.5%", ValueKind.PERCENT),
+                evidence=evidence(),
+            ),
+        ),
+    )
+    # The headline spans overlap, so the old comparison saw no disagreement.
+    assert not _disjoint(9.0, 14.5, 10.0, 12.5)
+    conflict = detect_conflict("nominal_rate", ours, theirs)
+    assert conflict is not None, "the AMD rows are disjoint and must be reported"
+
+
+def test_per_currency_agreement_is_not_a_conflict() -> None:
+    """Matching rows that agree must stay quiet."""
+    def rate(label: str, value: str) -> FieldVariant:
+        return FieldVariant(
+            label=label,
+            value=value,
+            normalized=normalize(value, ValueKind.PERCENT),
+            evidence=evidence(),
+        )
+
+    ours = FieldValue(
+        value="13.75-14.5%",
+        normalized=normalize("13.75-14.5%", ValueKind.PERCENT),
+        evidence=evidence(),
+        status=FieldStatus.FOUND,
+        variants=(rate("ՀՀ դրամ", "13.75-14.5%"),),
+    )
+    theirs = FieldValue(
+        value="14-14.2%",
+        normalized=normalize("14-14.2%", ValueKind.PERCENT),
+        evidence=evidence(),
+        status=FieldStatus.FOUND,
+        variants=(rate("ՀՀ դրամ", "14-14.2%"),),
+    )
+    assert detect_conflict("nominal_rate", ours, theirs) is None
+
+
+def test_unlabelled_values_still_compare_as_before() -> None:
+    """No variants on one side means the headline comparison, unchanged."""
+    assert (
+        detect_conflict(
+            "nominal_rate",
+            found("11.9-12.5%", ValueKind.PERCENT),
+            found("13.75-14.5%", ValueKind.PERCENT),
         )
         is not None
     )

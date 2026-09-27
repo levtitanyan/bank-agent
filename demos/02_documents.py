@@ -57,7 +57,7 @@ def main() -> None:
 
     demo.check("the document parsed", bool(document.pages))
     demo.check("Armenian survived the round trip", "տոկոսադրույք" in text)
-    demo.check("a rate is present in the text", "20.1-21.6%" in text)
+    demo.check("a rate is present in the text", "11.9-12.5%" in text)
     demo.check(
         "every page carries a quality score", all(page.quality >= 0 for page in document.pages)
     )

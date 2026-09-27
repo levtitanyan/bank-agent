@@ -9,6 +9,7 @@ reported but never put to a reviewer.
 
 from __future__ import annotations
 
+import itertools
 import json
 import sqlite3
 import sys
@@ -31,6 +32,14 @@ def main() -> None:
     """Run a baseline, a repeat, a forced change, and a review."""
     demo = start("Demo 5 — change detection and human review")
     p = parts()
+    if not p.live:
+        demo.note(
+            "Offline: the rule-based extractor, not Gemini. Said plainly because it matters -"
+        )
+        demo.note(
+            "it reads prose worse than a model, and it is what makes the source conflicts"
+        )
+        demo.note("below fire reliably in a review room. See docs/LIMITATIONS.md §2.4.")
     product = p.catalog.get("consumer_loan")
     assert product is not None
     tmp = Path(tempfile.mkdtemp())
@@ -83,7 +92,9 @@ def main() -> None:
         )
     print(f"  stored {field_id} rewritten to 8.0%")
 
-    answers = iter(["a"])
+    # Several questions can be raised in one run; a demo that answers only the
+    # first crashes on the second.
+    answers = itertools.repeat("a")
     reviewer = CliReviewer("demo-reviewer", stream=sys.stdout, prompt=lambda _p: next(answers))
     print("\n  --- what the reviewer sees ---")
     third = cycle(reviewer)
@@ -99,6 +110,20 @@ def main() -> None:
     fresh = [outcome for _, outcome in fourth.reviews if not outcome.remembered]
     print(f"  reviews this run: {len(fourth.reviews)}  of which newly asked: {len(fresh)}")
     demo.check("nothing was re-asked", not fresh)
+
+    demo.heading("Two official sources that disagree")
+    demo.note("Both documents state the same field and do not agree; that is a question")
+    demo.note("for a person, not an average.")
+    conflicts = third.outcome.conflicts
+    for conflict in conflicts:
+        print(f"  {conflict.field_id}:")
+        print(f"    primary   : {conflict.primary.value[:56]}")
+        print(f"    supporting: {conflict.supporting.value[:56]}")
+    demo.check("a source conflict was detected", bool(conflicts))
+    demo.check(
+        "each conflict carries both sources' evidence",
+        all(c.primary.evidence and c.supporting.evidence for c in conflicts),
+    )
 
     demo.heading("A change that is ours is reported, never escalated")
     before = store.history("consumer_loan", limit=10)[-1].extraction
