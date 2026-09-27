@@ -6,7 +6,7 @@ the ADK agent, its tools and the CLI.
 
 | | |
 |---|---|
-| Result | **17 of 20 tariff fields found** across two products, stable across consecutive runs; all three absences accounted for individually |
+| Result | **14 of 20** through the shipping path (discovery → hybrid retrieval → Gemini), 15/20 with BM25-only, 17/20 when the two authoritative documents are supplied directly instead of discovered; every absence accounted for individually in [LIMITATIONS.md](LIMITATIONS.md) |
 | Tests | **407 passing**, none touching the network, including one whole-flow test from a typed query to a rendered report |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
 | Code | ~13,000 lines source (60 modules) · ~5,900 lines tests · 31 commits |
@@ -47,7 +47,7 @@ mortgage        gate 10/10 · recall@4 10/10 — values on pages 1–7 of the ա
 And then extracts each field, with a verified quote behind every value:
 
 ```
-Սպառողական վարկ (consumer_loan)          17/20 fields found across both products
+Սպառողական վարկ (consumer_loan)          sources supplied directly: 17/20 fields
   Արժույթ                  ՀՀ դրամ                    ← «Արժույթ ՀՀ դրամ»
   Անվանական տոկոսադրույք   20.1-21.6%                 ← «Տարեկան անվանական տոկոսադրույք՝ 20.1-21.6%»
                              + variants: acba digital 17.5-21.6% · Մասնաճյուղ 20.1 - 21.6%
@@ -485,7 +485,7 @@ before it could be measured; that gap is recorded rather than filled with an est
 | 5.3 | Official source discovery | ✅ |
 | 5.4 | PDF, OCR and document processing | ✅ |
 | 5.5 | Chunking and RAG | ✅ chunking with §5.5 metadata, hybrid retrieval, relevance gate, both modes measured |
-| 5.6 | Structured extraction | ✅ `response_schema` at temperature 0, grouped calls, quote verification, 17/20 fields |
+| 5.6 | Structured extraction | ✅ `response_schema` at temperature 0, grouped calls, quote verification; 14/20 through discovery, 17/20 with sources supplied |
 | 5.7 | Evidence and provenance | ✅ every value carries a verified verbatim quote, its document, page and section |
 | 5.8 | Deterministic validation | ✅ normalizers, range and domain checks that downgrade rather than edit, conflict detection |
 | 5.9 | Change detection | ✅ SQLite snapshots, normalized diffing, per-kind magnitude, provenance separating our changes from the bank's |

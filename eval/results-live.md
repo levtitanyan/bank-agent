@@ -3,21 +3,19 @@
 Written by `eval/run_eval.py` from an actual run. Not edited by hand: if a number
 here disagrees with a number elsewhere in the documentation, this one is right.
 
-- **Run:** 2026-09-27 12:03 UTC
-- **Corpus:** offline (fixture corpus)
-- **Extractor:** rule_based
-- **Retrieval:** BM25 only
-- **Result:** 18/18 asserted items passed
-- **Tariff fields found:** 16/20 across both products — absent: consumer_loan.application_fee, consumer_loan.term, mortgage.application_fee, mortgage.salary_privileges
+- **Run:** 2026-09-27 12:06 UTC
+- **Corpus:** live (acba.am)
+- **Extractor:** gemini:gemini-3.5-flash-lite
+- **Retrieval:** BM25 + embeddings
+- **Result:** 10/10 asserted items passed, 8 reported without assertion
+- **Tariff fields found:** 14/20 across both products — absent: consumer_loan.application_fee, consumer_loan.service_fee, mortgage.disbursement_fee, mortgage.service_fee, mortgage.salary_privileges
 
 ## What this measures, and what it does not
 
-This is the **offline** run, over trimmed copies of real ACBA pages and a PDF
-standing in for the bank's older information summary, read by the rule-based
-extractor. It needs no key and no network, so anyone can reproduce it exactly.
-It reads prose worse than a model, so several values below are whole passages
-rather than the figure inside them — that is the backend, not the pipeline.
-The live run is in [results-live.md](results-live.md).
+This is the **live** run: the documents ACBA published on the date above, read
+by the configured model. Field values drift, because the bank reprices — that is
+what this system exists to notice, so field items are reported here rather than
+asserted. The offline run in [results.md](results.md) is the one that asserts.
 
 Two products at one bank, in Armenian. The field registry, the morphology, the value
 shapes and the query terms are all fitted to that corpus — the query terms were
@@ -39,15 +37,15 @@ about a second bank.
 | `resolve-latin-translit` | resolution | ✅ pass | → mortgage (100) |
 | `reject-unsupported-product` | resolution | ✅ pass | status=not_found |
 | `reject-unrelated-query` | resolution | ✅ pass | status=not_found |
-| `consumer-nominal-rate` | field | ✅ pass | nominal_rate = 20.1-21.6% |
-| `consumer-currency` | field | ✅ pass | currency = ված րոպեների ընթացքում Վարկի տրամադրում առանց միջնորդավճ |
-| `consumer-amount` | field | ✅ pass | amount = 50,000 - 10,000,000 ՀՀ դրամ Տոկոսադրույ |
-| `consumer-collateral` | field | ✅ pass | collateral = ված րոպեների ընթացքում Վարկի տրամադրում առանց միջնորդավճ |
-| `mortgage-nominal-rate` | field | ✅ pass | nominal_rate = 13.5 - 14.5% |
-| `mortgage-currency` | field | ✅ pass | currency = Արժույթ՝ ՀՀ դրամ Տևողություն՝ 9-60 ամիս Գումար՝ 50,000 - |
-| `consumer-application-fee-absent` | field | ✅ pass | application_fee = not_found |
-| `consumer-term-absent-offline` | field | ✅ pass | term = not_found |
-| `no-field-is-invented` | invariant | ✅ pass | 16 reported values, every quote verified |
+| `consumer-nominal-rate` | field | · reported | nominal_rate = 20.1-21.6% |
+| `consumer-currency` | field | · reported | currency = ՀՀ դրամ |
+| `consumer-amount` | field | · reported | amount = 50,000 - 10,000,000 ՀՀ դրամ |
+| `consumer-collateral` | field | · reported | collateral = առանց գրավ |
+| `mortgage-nominal-rate` | field | · reported | nominal_rate = unverified |
+| `mortgage-currency` | field | · reported | currency = ՀՀ դրամ և արտարժույթ |
+| `consumer-application-fee-absent` | field | · reported | application_fee = not_found |
+| `consumer-term-absent-offline` | field | · reported | term = 9-60 ամիս |
+| `no-field-is-invented` | invariant | ✅ pass | 14 reported values, every quote verified |
 
 ## Notes on individual items
 

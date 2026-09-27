@@ -35,6 +35,7 @@ from tariff_agent.extraction.extractor import Extractor, GeminiExtractor, RuleBa
 from tariff_agent.http.client import SafeHttpClient
 from tariff_agent.http.robots import build_client
 from tariff_agent.observability.logging import configure_logging
+from tariff_agent.rag.embeddings import Embedder, build_embedder
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "discovery"
@@ -191,6 +192,9 @@ class Parts:
         monitoring: Thresholds and review policy.
         client: The HTTP client, real or mocked.
         extractor: The extraction backend.
+        embedder: Embeddings when a key is configured and this is a live run,
+            else None. Offline runs are BM25-only so that they need no key and
+            stay reproducible.
         live: Whether this is running against the real site.
     """
 
@@ -201,6 +205,7 @@ class Parts:
     monitoring: MonitoringConfig
     client: SafeHttpClient
     extractor: Extractor
+    embedder: Embedder | None
     live: bool
 
 
@@ -218,6 +223,7 @@ def parts(*, serve_pdfs: bool = True) -> Parts:
     settings = get_settings()
     live = is_live()
     allowlist = load_allowlist()
+    embedder: Embedder | None = None
     if live:
         client = build_client(allowlist, settings.http)
         extractor: Extractor = (
@@ -230,6 +236,14 @@ def parts(*, serve_pdfs: bool = True) -> Parts:
             if settings.has_api_key
             else RuleBasedExtractor()
         )
+        # A live run must measure what actually ships, which is hybrid
+        # retrieval. Measuring BM25-only here and reporting it as the live
+        # result would describe a configuration nobody runs.
+        embedder = build_embedder(
+            settings.google_api_key.get_secret_value()  # type: ignore[union-attr]
+            if settings.has_api_key and settings.google_api_key
+            else None
+        )
     else:
         client = offline_client(serve_pdfs=serve_pdfs)
         extractor = RuleBasedExtractor()
@@ -241,5 +255,6 @@ def parts(*, serve_pdfs: bool = True) -> Parts:
         monitoring=load_monitoring_config(),
         client=client,
         extractor=extractor,
+        embedder=embedder,
         live=live,
     )

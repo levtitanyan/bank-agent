@@ -36,6 +36,14 @@ from tariff_agent.pipeline import load_sources  # noqa: E402
 
 DATASET = Path(__file__).parent / "dataset.yaml"
 RESULTS = Path(__file__).parent / "results.md"
+RESULTS_LIVE = Path(__file__).parent / "results-live.md"
+"""Two files, never one.
+
+The offline run is reproducible by anyone with the repository and no key; the
+live run is what the bank published today. Overwriting one with the other would
+lose whichever a reader needed, and a single file could not say which corpus its
+numbers came from without being read carefully - which is how a stale number
+gets quoted."""
 
 
 @dataclass
@@ -160,7 +168,9 @@ def main() -> None:
         if product is None:
             continue
         try:
-            loaded = load_sources(p.client, product, p.discovery, p.settings, embedder=None)
+            loaded = load_sources(
+                p.client, product, p.discovery, p.settings, embedder=p.embedder
+            )
             extractions[product_id] = extract_tariffs(
                 product, p.catalog.bank, loaded.retriever, p.extractor, p.allowlist,
                 primary_document=loaded.primary_document,
@@ -185,12 +195,40 @@ def main() -> None:
     info = sum(1 for r in results if r.outcome == "info")
     print(f"\n{passed} passed, {failed} failed, {info} reported")
 
-    RESULTS.write_text(render(results, dataset, mode, p), encoding="utf-8")
-    print(f"wrote {RESULTS.relative_to(ROOT)}")
+    destination = RESULTS_LIVE if p.live else RESULTS
+    destination.write_text(render(results, dataset, mode, p, extractions), encoding="utf-8")
+    print(f"wrote {destination.relative_to(ROOT)}")
     sys.exit(1 if failed else 0)
 
 
-def render(results: list[Result], dataset: dict[str, Any], mode: str, p: Any) -> str:
+def field_tally(extractions: dict[str, Any]) -> tuple[int, int, list[str]]:
+    """Count how many tariff fields came back with a verified value.
+
+    Args:
+        extractions: Per-product extraction outcomes.
+
+    Returns:
+        Found, total, and the ids of the fields reported as absent.
+    """
+    found = total = 0
+    absent = []
+    for product_id, outcome in extractions.items():
+        for field_id, value in outcome.extraction.fields.items():
+            total += 1
+            if value.status is FieldStatus.FOUND:
+                found += 1
+            elif value.status is FieldStatus.NOT_FOUND:
+                absent.append(f"{product_id}.{field_id}")
+    return found, total, absent
+
+
+def render(
+    results: list[Result],
+    dataset: dict[str, Any],
+    mode: str,
+    p: Any,
+    extractions: dict[str, Any],
+) -> str:
     """Write the results document.
 
     Args:
@@ -198,11 +236,13 @@ def render(results: list[Result], dataset: dict[str, Any], mode: str, p: Any) ->
         dataset: The dataset, for the per-item notes.
         mode: Which corpus this ran against.
         p: The assembled parts, for the extractor's name.
+        extractions: Per-product extraction outcomes, for the field tally.
 
     Returns:
         The markdown.
     """
     notes = {item["id"]: item.get("note", "").strip() for item in dataset["items"]}
+    found, total, absent = field_tally(extractions)
     passed = sum(1 for r in results if r.outcome == "pass")
     failed = sum(1 for r in results if r.outcome == "fail")
     info = sum(1 for r in results if r.outcome == "info")
@@ -217,11 +257,33 @@ def render(results: list[Result], dataset: dict[str, Any], mode: str, p: Any) ->
         f"- **Run:** {datetime.now(UTC):%Y-%m-%d %H:%M} UTC",
         f"- **Corpus:** {mode}",
         f"- **Extractor:** {p.extractor.method}",
+        f"- **Retrieval:** {'BM25 + embeddings' if p.embedder else 'BM25 only'}",
         f"- **Result:** {passed}/{asserted} asserted items passed"
         + (f", {info} reported without assertion" if info else ""),
+        f"- **Tariff fields found:** {found}/{total} across both products"
+        + (f" — absent: {', '.join(absent)}" if absent else ""),
         "",
         "## What this measures, and what it does not",
         "",
+        *(
+            [
+                "This is the **live** run: the documents ACBA published on the date above, read",
+                "by the configured model. Field values drift, because the bank reprices — that is",
+                "what this system exists to notice, so field items are reported here rather than",
+                "asserted. The offline run in [results.md](results.md) is the one that asserts.",
+                "",
+            ]
+            if p.live
+            else [
+                "This is the **offline** run, over trimmed copies of real ACBA pages and a PDF",
+                "standing in for the bank's older information summary, read by the rule-based",
+                "extractor. It needs no key and no network, so anyone can reproduce it exactly.",
+                "It reads prose worse than a model, so several values below are whole passages",
+                "rather than the figure inside them — that is the backend, not the pipeline.",
+                "The live run is in [results-live.md](results-live.md).",
+                "",
+            ]
+        ),
         "Two products at one bank, in Armenian. The field registry, the morphology, the value",
         "shapes and the query terms are all fitted to that corpus — the query terms were",
         "corrected against the real documents three times, which is the honest way to build",

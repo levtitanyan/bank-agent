@@ -2,7 +2,17 @@
 
 What this system does not do, what it gets wrong, and what has not been measured.
 
-The extraction result is **17 of 20 fields found** — two products, ten fields each. This
+The extraction result depends on how the documents get in front of it:
+
+| Path | Found |
+|---|---|
+| The two authoritative documents supplied directly | **17 / 20** |
+| Discovery + BM25-only retrieval | 15 / 20 |
+| Discovery + hybrid retrieval — **what `tariff-agent` and the agent actually run** | 14 / 20 |
+
+§1 below accounts for the three absences in the first row, which are the interesting ones —
+they are the bank's silence rather than a failure to read. §2.5 accounts for the gap between
+the rows, which is ours. This
 document accounts for all three that are not, one field at a time, with the evidence for each
 claim. A number on its own is not a result; the three absences are the interesting part, and
 two of them are the bank's silence rather than the system's failure.
@@ -133,6 +143,51 @@ was fixed by giving a bare zero a fee normalizer, not by suppressing the trigger
 **The honest position:** the trigger works and is demonstrated offline; the live corpus does
 not currently contain a pair it can catch. A reviewer should judge it on the offline demo and
 the tests, not on a live run.
+
+### 2.5 Discovery costs three fields against hand-picked sources
+
+Measured on 2026-09-27 through `eval/run_eval.py --live`, which runs exactly what
+`tariff-agent run` runs:
+
+| Path | Found | Not found |
+|---|---|---|
+| Sources supplied directly (primary + the one shared tariff book) | 17/20 | 3 |
+| Discovery, BM25-only | 15/20 | 4 |
+| Discovery, hybrid (the default when a key is configured) | 14/20 | 5 |
+
+**The fields lost are both products' `service_fee`, plus a `nominal_rate` that comes back
+`unverified` instead of found.** Named individually:
+
+- `consumer_loan.service_fee` — was found as «Վարկային հաշվի բացման, վարման և սպասարկման
+  նպատակով … չի գանձվում», on page 2 of the shared tariff book.
+- `mortgage.service_fee` — was found as «սպասարկման միջնորդավճարներ չկան». Its top retrieved
+  passage is now the disclaimer «… ԲՈԼՈՐ ՊԱՐՏԱԴԻՐ ՎՃԱՐՆԵՐԸ …», which mentions service charges
+  without stating one.
+
+**The cause is not the retrieval mode.** Both the 17/20 and 14/20 runs used embeddings, and
+BM25-only scores *better* than hybrid here (15 against 14) — consistent with
+[P5-D14](DECISIONS.md), which measured semantic ranking as buying nothing on this corpus.
+
+The cause is the **source set**. Discovery returns more documents than the hand-picked pair —
+for the consumer loan a category page and an online-loan page alongside the tariff book; for
+the mortgage a floating-rate PDF and a different information summary as primary — and
+`top_k` is 4 passages *per source role*, not per document. More documents compete for the same
+four slots, and the passage that answers `service_fee` is displaced by passages from documents
+that merely mention fees.
+
+**What would close it**, in rough order of cost: raise `top_k` for the supporting role, which
+trades prompt size for recall; or cap the supporting set by score rather than by count, so a
+document scoring 63 does not displace one scoring 70; or de-duplicate at retrieval so several
+near-identical marketing pages cannot occupy four slots between them. None of these is a
+research problem, and none was attempted, because the evidence for choosing between them is an
+evaluation set larger than the one this project has.
+
+**Should BM25-only be the default?** On this evidence, yes — it scores one field higher and
+removes an API dependency, a per-run charge and a rate-limit failure mode. The decision should
+rest on a corpus where the two are genuinely separable, which this is not: a one-field
+difference across twenty is well inside the noise of a single model run. The honest position
+is that hybrid is not *earning* its cost here, not that lexical retrieval is better in general
+— a bank whose documents paraphrase more would likely invert it.
 
 ## 3. What has not been measured
 

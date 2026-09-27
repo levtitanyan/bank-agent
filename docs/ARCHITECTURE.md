@@ -13,9 +13,10 @@ run in, and the decisions behind them.
 > An ADK agent reaches the same parts through six tools and decides for itself which steps a
 > question needs; a CLI exposes both paths.
 >
-> **Measured:** 17 of 20 fields found across two products, stable across consecutive runs,
-> with all three absences accounted for in [`LIMITATIONS.md`](LIMITATIONS.md). 407 tests,
-> including one whole-flow test from a typed query to a rendered report.
+> **Measured:** 14 of 20 fields found through the shipping path, 17 of 20 when the two
+> authoritative documents are supplied directly rather than discovered — the gap, and why, is
+> in [`LIMITATIONS.md`](LIMITATIONS.md) §2.5. 431 tests, including one whole-flow test from a
+> typed query to a rendered report.
 >
 > **Demos and evaluation:** five runnable demos in [`demos/`](../demos/), offline by default,
 > each asserting its own claims; an 18-item evaluation set in [`eval/`](../eval/) whose results
