@@ -18,7 +18,7 @@ Python 3.11 · Google ADK · Gemini
 > An ADK agent reaches the same parts through six tools and decides which steps a question
 > needs; a CLI exposes both paths.
 >
-> **17 of 20 fields found** across two products, stable across consecutive runs; 427 tests.
+> **17 of 20 fields found** across two products, stable across consecutive runs; 431 tests.
 > Five runnable demos and an 18-item evaluation set are in [demos/](demos/) and [eval/](eval/).
 > See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap, and
 > [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what it gets wrong.
@@ -44,7 +44,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the checks
 
 ```bash
-pytest                            # 427 tests, none of which touch the network
+pytest                            # 431 tests, none of which touch the network
 ruff check src tests              # lint + docstring rules
 mypy                              # strict type checking of src/
 ```
@@ -76,6 +76,20 @@ own claim and exits non-zero if it fails. Pass `--live` to run against acba.am.
 
 ## Using it
 
+The agent has a web UI, which is the clearest way to watch it work — every tool call and
+every result is shown as it happens:
+
+```bash
+adk web src        # then open the printed URL and pick "tariff_agent.agent"
+```
+
+Ask it «Ի՞նչ է սպառողական վարկի տոկոսադրույքը:» with a recent snapshot stored and it answers
+from history in two tool calls without fetching anything. Ask for a product it has never read
+and it runs the full path — discover, fetch, parse, index, extract, diff — five calls, visible
+one at a time.
+
+The same four commands without a browser:
+
 ```bash
 tariff-agent run "потребительский кредит"     # one product, deterministic, prints the report
 tariff-agent monitor --json                   # the whole catalogue: the scheduled path
@@ -86,6 +100,9 @@ tariff-agent agent "Ի՞նչ է սպառողական վարկի տոկոսադր
 
 `--json` goes to stdout and logs to stderr, so output stays parseable. Exit codes: `0` fine,
 `1` a run failed, `2` a bad request, `3` something needs a human.
+
+`adk web` and `tariff-agent agent` need `GOOGLE_API_KEY`; everything else runs offline with the
+rule-based extractor.
 
 ## Ground rules this project follows
 
@@ -109,7 +126,7 @@ Measured, reproducible, and written by the run rather than by hand —
 | Tariff fields found | **17 of 20** across two products, live, stable across consecutive runs |
 | The other three | Accounted for individually in [docs/LIMITATIONS.md](docs/LIMITATIONS.md) §1 |
 | Evaluation set | 18 items, hy/en/ru, both products, three NOT_FOUND negatives |
-| Tests | 427, none touching the network |
+| Tests | 431, none touching the network |
 | Retrieval | gate 19/20, recall@4 19/20, top-1 16/20 (BM25) |
 
 ```bash
@@ -134,7 +151,7 @@ python eval/run_eval.py --live   # the same items against acba.am
 | 5.11 | Error handling | [`errors.py`](src/tariff_agent/errors.py) · P8-D3 (nothing raises into the model) |
 | 5.12 | Security | [`http/url_policy.py`](src/tariff_agent/http/url_policy.py) · P1-D9…D12, P2-D2…D7, P8-D2, P8-D4 |
 | 5.13 | Observability | [`agent/metrics.py`](src/tariff_agent/agent/metrics.py) · P1-D16, P8-D9 |
-| 5.14 | Testing | [`tests/`](tests/) · 427 tests, incl. one whole-flow run and four agent scenarios |
+| 5.14 | Testing | [`tests/`](tests/) · 431 tests, incl. one whole-flow run and four agent scenarios |
 | 5.15 | Python engineering | Typed throughout, `mypy --strict` clean, docstring on every module |
 
 Decision ids (`P7-D4`) index [docs/DECISIONS.md](docs/DECISIONS.md), which gives the options

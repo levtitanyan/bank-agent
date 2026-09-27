@@ -5,3 +5,7 @@ Everything the model can do lives behind the six functions in
 path or a document's bytes - only ids minted by earlier tools, and summaries
 small enough to reason about.
 """
+
+from tariff_agent.agent.agent import root_agent
+
+__all__ = ["root_agent"]

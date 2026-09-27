@@ -119,7 +119,23 @@ def build_agent(
         description="Answers questions about ACBA Bank's published loan tariffs.",
         instruction=instruction,
         tools=list(TOOLS),
+        before_agent_callback=_begin_turn,
     )
+
+
+def _begin_turn(callback_context: Any) -> None:
+    """Give each turn its own budget and its own metrics.
+
+    Args:
+        callback_context: ADK's context for the turn; unused.
+
+    Returns:
+        None, so the agent runs normally.
+    """
+    from tariff_agent.agent.session import current_session
+
+    current_session().begin_turn()
+    return None
 
 
 def run_agent(question: str, session: AgentSession, *, model: Any | None = None) -> AgentRun:
@@ -204,3 +220,29 @@ def _absorb_usage(event: Any, metrics: RunMetrics) -> None:
         getattr(usage, "candidates_token_count", None),
         getattr(usage, "total_token_count", None),
     )
+
+
+def _discoverable_agent() -> Any:
+    """Build the agent ``adk web`` and ``adk run`` pick up.
+
+    ADK discovers one agent per directory under the folder it is pointed at, by
+    importing it and looking for ``root_agent``. Constructing it at import time
+    is cheap - no network, no model call - and the key comes from settings
+    rather than the environment, so it works from a `.env` like everything else.
+
+    Returns:
+        The configured agent.
+    """
+    from tariff_agent.config import get_settings
+
+    settings = get_settings()
+    key = (
+        settings.google_api_key.get_secret_value()
+        if settings.has_api_key and settings.google_api_key is not None
+        else None
+    )
+    return build_agent(settings.gemini_model, api_key=key)
+
+
+root_agent = _discoverable_agent()
+"""The entry point ``adk web`` looks for. See :func:`_discoverable_agent`."""

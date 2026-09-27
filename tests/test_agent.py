@@ -20,7 +20,7 @@ import httpx
 import pytest
 from google.adk.models import BaseLlm
 
-from tariff_agent.agent.session import AgentSession, Budget, use_session
+from tariff_agent.agent.session import AgentSession, Budget, SourceRecord, use_session
 from tariff_agent.agent.tools import (
     TOOLS,
     diff_against_previous,
@@ -648,3 +648,76 @@ def test_the_four_scenarios_take_four_different_paths(tmp_path: Path) -> None:
 
     assert len(sequences) == 4, sequences
     assert min(len(sequence) for sequence in sequences) == 1
+
+# --------------------------------------------------------------------------- #
+# The `adk web` surface
+# --------------------------------------------------------------------------- #
+
+
+def test_a_budget_is_per_turn_not_per_process(tmp_path: Path) -> None:
+    """Behind `adk web` one session serves every conversation.
+
+    Without a per-turn reset the twelfth tool call anywhere killed the server
+    for good, and the no-progress detector refused a question because somebody
+    else had already asked it. Found by running three conversations through
+    `adk web` and watching the third fail.
+    """
+    session = build_session(tmp_path, budget=Budget(max_tool_calls=2))
+    with use_session(session):
+        assert get_latest_snapshot("consumer_loan")["status"] == "ok"
+        assert get_latest_snapshot("mortgage")["status"] == "ok"
+        exhausted = get_latest_snapshot("consumer_loan")
+        assert exhausted["error_type"] in {"budget_exhausted", "no_progress"}
+
+        session.begin_turn()
+
+        revived = get_latest_snapshot("consumer_loan")
+        assert revived["status"] == "ok", "a new turn gets a new budget"
+        assert session.calls_made == 1
+        assert session.metrics.stop_reason == "completed"
+
+
+def test_a_new_turn_keeps_the_ids_an_earlier_turn_minted(tmp_path: Path) -> None:
+    """A follow-up question may still refer to `src-1`."""
+    session = build_session(tmp_path)
+    session.sources["src-1"] = SourceRecord(product_id="consumer_loan", retriever=None)  # type: ignore[arg-type]
+    session.begin_turn()
+    assert "src-1" in session.sources
+
+
+def test_the_package_exposes_the_agent_adk_looks_for() -> None:
+    """`adk web src` imports this and looks for `root_agent`.
+
+    Asserted because the name is a contract with a tool outside this codebase:
+    rename it and the web UI silently stops discovering the agent.
+    """
+    from tariff_agent.agent import root_agent
+
+    assert root_agent.name == "acba_tariff_agent"
+    assert {tool.__name__ for tool in root_agent.tools} == {
+        "resolve_product",
+        "find_sources",
+        "get_latest_snapshot",
+        "extract_tariffs",
+        "diff_against_previous",
+        "request_review",
+    }
+
+
+def test_tools_work_without_a_session_being_installed(tmp_path: Path) -> None:
+    """`adk web` never calls use_session, so the tools must still function.
+
+    The default is built once from the same configuration the CLI uses, and it
+    attaches no reviewer: nobody is at a terminal behind a web UI, so a question
+    is recorded and reported rather than asked.
+    """
+    from tariff_agent.agent.session import default_session, reset_default_session
+
+    reset_default_session()
+    try:
+        result = resolve_product("consumer loan")
+        assert result["status"] == "ok"
+        assert result["product_id"] == "consumer_loan"
+        assert default_session().reviewer is None
+    finally:
+        reset_default_session()

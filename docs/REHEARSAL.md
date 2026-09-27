@@ -10,7 +10,7 @@ Total: about twelve minutes without questions.
 
 ## Before the room
 
-- [ ] `pytest -q` — 427 pass. Do this on the actual machine, not from memory.
+- [ ] `pytest -q` — 431 pass. Do this on the actual machine, not from memory.
 - [ ] `./demos/run_all.sh` — all five pass. This is the fallback for everything.
 - [ ] `python eval/run_eval.py` — 18/18, and `eval/results.md` regenerates.
 - [ ] Terminal font renders Armenian. Check «Տարեկան անվանական տոկոսադրույք՝ 20.1-21.6%»
@@ -18,6 +18,11 @@ Total: about twelve minutes without questions.
 - [ ] Window at least 100 columns; the report and the reviewer prompt are formatted for it.
 - [ ] `echo $GOOGLE_API_KEY | head -c 8` — confirm a key is present **only if** you intend to
       run the live step. Everything else works without one.
+- [ ] `adk web src` starts and lists `tariff_agent.agent`. Start it before the room and leave
+      it running; first startup takes a few seconds and is not worth doing on stage.
+- [ ] `tariff-agent run "потребительский кредит"` once, so the first agent question has a
+      snapshot recent enough to answer from. Without it the demo's best moment — an answer
+      with zero fetches — does not happen.
 - [ ] Decide in advance whether you are doing the live step at all. It is the only part that
       can fail for reasons outside the repository.
 
@@ -88,19 +93,40 @@ our own extractor being reported but never escalated.
 That last one is the argument worth making: a reviewer trained to click through our changes
 will click through the one that matters.
 
-### 7 · The agent decides what to skip (1.5 min) — **live**
+### 7 · The agent decides what to skip (2.5 min) — **live**
+
+**Primary surface: the ADK web UI.** Start it *before* the room, not during:
 
 ```bash
-tariff-agent run "потребительский кредит"        # seeds a snapshot
+tariff-agent run "потребительский кредит"   # seeds a snapshot for the first question
+adk web src                                  # then open the URL, pick "tariff_agent.agent"
+```
+
+Ask two questions and let people watch the tool calls appear one at a time:
+
+1. «Ի՞նչ է սպառողական վարկի տարեկան անվանական տոկոսադրույքը:» — two calls,
+   `resolve_product → get_latest_snapshot`, **no fetch at all**. Expand
+   `get_latest_snapshot` in the UI and show that what the model received is a
+   summary and an `age_hours`, not a document.
+2. *"What are the current mortgage tariffs, and did anything change?"* — five calls,
+   `resolve_product → get_latest_snapshot → find_sources → extract_tariffs →
+   diff_against_previous`. It reads the bank because there is nothing stored.
+
+The point to make while they watch: **the same agent took two different paths.** It is not a
+script with a language model attached.
+
+Expand any tool result to show the contract — `status`, ids, no URLs. That is the
+prompt-injection boundary, and it is visible rather than asserted.
+
+**Fallback if the UI will not start:** the CLI does the same thing.
+
+```bash
 tariff-agent agent "Ի՞նչ է սպառողական վարկի տոկոսադրույքը:"
 ```
 
-Point at the tool sequence and the metrics line: two tools, **zero network fetches**, answered
-from the snapshot. The agent is not a fixed chain — with no snapshot it reads the bank, with an
-ambiguous name it stops and asks.
-
-**If this fails, skip it.** Everything it demonstrates is also in `demos/`, and the four tool
-sequences are asserted in `tests/test_agent.py` against the real ADK runner.
+It prints the tool sequence and the `run_metrics` line. **If that fails too, skip step 7** —
+everything it demonstrates is in `demos/`, and the four tool sequences are asserted in
+`tests/test_agent.py` against the real ADK runner.
 
 ### 8 · What it gets wrong (1 min, no terminal)
 
@@ -119,7 +145,9 @@ because the free tier ran out.
 |---|---|
 | No network | Everything except step 7 is offline already. Skip step 7 and say why. |
 | `429` quota exhausted | The live run replays from the extraction cache and makes **zero** model calls — point at `model_calls=0` and carry on. If it still fails, skip step 7. |
-| No `GOOGLE_API_KEY` | `run` works offline with the rule-based extractor; `agent` refuses with a clear message. Show the refusal — it is the correct behaviour. |
+| No `GOOGLE_API_KEY` | `run` works offline with the rule-based extractor; `agent` and `adk web` refuse with a clear message. Show the refusal — it is the correct behaviour. |
+| `adk web` will not start | Fall back to `tariff-agent agent "..."`, which prints the same tool sequence and metrics. |
+| The web UI shows no agent | It must be `adk web src`, not `adk web .` — ADK treats each subdirectory of the given folder as one agent. |
 | ACBA redesigned overnight | The demos use committed fixtures and do not care. Only step 7 touches the live site. |
 | A demo exits non-zero | Read what it says. Each demo prints which claim failed; that is the design. Do not re-run hoping for a different result — say what broke and move on. |
 | Armenian renders as boxes | Fall back to `--json`, or to `eval/results.md`, which uses the same strings in a file the reviewer can open. |

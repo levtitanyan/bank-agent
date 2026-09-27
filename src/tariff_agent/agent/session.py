@@ -172,6 +172,22 @@ class AgentSession:
 
     # -- budget ------------------------------------------------------------- #
 
+    def begin_turn(self) -> None:
+        """Start a new turn: fresh budget, fresh metrics, same wiring.
+
+        A budget is a limit on one *turn*, not on a process. Behind ``adk web``
+        one session serves every conversation, and without this the twelfth tool
+        call anywhere killed the server for good - and the no-progress detector
+        refused a question simply because somebody else had already asked it.
+
+        The id maps are kept, so a follow-up question can still refer to the
+        ``src-1`` an earlier turn produced.
+        """
+        self.metrics = RunMetrics()
+        self._seen.clear()
+        self._calls = 0
+        self._started = time.monotonic()
+
     @property
     def calls_made(self) -> int:
         """How many tool calls have been charged."""
@@ -253,17 +269,85 @@ def use_session(session: AgentSession) -> Iterator[AgentSession]:
         _CURRENT.reset(token)
 
 
+_DEFAULT: AgentSession | None = None
+
+
+def default_session() -> AgentSession:
+    """Build, once, the session used when nobody installed one.
+
+    ``adk web`` and ``adk run`` import a bare agent and call its tools directly;
+    there is no place in that flow to wrap the turn in :func:`use_session`.
+    Rather than have the tools fail outside our own runner, one process-wide
+    session is built on first use, from the same configuration the CLI uses.
+
+    Returns:
+        The process default, created on first call and reused after.
+    """
+    global _DEFAULT
+    if _DEFAULT is None:
+        from tariff_agent.config import (
+            get_settings,
+            load_allowlist,
+            load_discovery_config,
+            load_monitoring_config,
+            load_products,
+        )
+        from tariff_agent.extraction.cache import CachedExtractor
+        from tariff_agent.extraction.extractor import (
+            GeminiExtractor,
+            RuleBasedExtractor,
+        )
+        from tariff_agent.http.robots import build_client
+        from tariff_agent.rag.embeddings import build_embedder
+        from tariff_agent.snapshots.store import SnapshotStore
+
+        settings = get_settings()
+        allowlist = load_allowlist()
+        key = (
+            settings.google_api_key.get_secret_value()
+            if settings.has_api_key and settings.google_api_key is not None
+            else None
+        )
+        backend: Extractor = (
+            GeminiExtractor(key, model=settings.gemini_model) if key else RuleBasedExtractor()
+        )
+        _DEFAULT = AgentSession(
+            settings=settings,
+            catalog=load_products(),
+            allowlist=allowlist,
+            discovery=load_discovery_config(),
+            monitoring=load_monitoring_config(),
+            store=SnapshotStore(settings.snapshots_db),
+            client=build_client(allowlist, settings.http),
+            extractor=CachedExtractor(backend, settings.rag.extraction_cache_dir),
+            embedder=build_embedder(key),
+            # Nobody is at a terminal behind a web UI, so questions are recorded
+            # and reported rather than asked; the snapshot stays pending.
+            reviewer=None,
+        )
+        logger.info("default_agent_session_created")
+    return _DEFAULT
+
+
+def reset_default_session() -> None:
+    """Forget the process default, so the next call builds a fresh one.
+
+    The budget and the minted ids are per-session, and a long-lived web process
+    would otherwise exhaust the first session's budget and never recover.
+    """
+    global _DEFAULT
+    _DEFAULT = None
+
+
 def current_session() -> AgentSession:
     """Return the session the current tool call belongs to.
 
     Returns:
-        The active session.
-
-    Raises:
-        RuntimeError: When no session is active, which is a programming error
-            rather than anything the model can cause.
+        The session installed by :func:`use_session`, or the process default
+        when the tools are being driven by something that never installed one -
+        ``adk web``, for instance.
     """
     session = _CURRENT.get()
     if session is None:
-        raise RuntimeError("no agent session is active; wrap the run in use_session()")
+        return default_session()
     return session
