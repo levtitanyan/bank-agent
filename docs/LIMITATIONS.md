@@ -189,6 +189,18 @@ difference across twenty is well inside the noise of a single model run. The hon
 is that hybrid is not *earning* its cost here, not that lexical retrieval is better in general
 — a bank whose documents paraphrase more would likely invert it.
 
+### 2.6 `model_calls` counts extraction requests, not agent turns
+
+A `run_metrics` line can read `"model_calls": 0` and `"total_tokens": 6875` at the same time,
+which looks self-contradictory. It is not: `model_calls` counts generate-content requests made
+by the *extractor*, which is the number that matters for the free-tier quota, while the agent's
+own reasoning turns appear only in the token counts. A question answered from a stored snapshot
+makes zero extraction calls and still spends a few thousand tokens deciding that.
+
+The field is named for what it counts and documented in `agent/metrics.py`, but a reviewer
+reading the line cold will pause at it. Splitting it into `extraction_calls` and `agent_turns`
+would be clearer; it was found after the code was frozen and is recorded rather than changed.
+
 ## 3. What has not been measured
 
 ### 3.1 `gemini-2.5-flash` is untested
