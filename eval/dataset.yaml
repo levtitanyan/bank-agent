@@ -1,0 +1,156 @@
+# Evaluation set for the ACBA tariff agent.
+#
+# Two kinds of item:
+#
+#   resolution — a product name in Armenian, English or Russian, and the id it
+#     must resolve to. These are corpus-independent: the answer is the same
+#     offline and live, because matching is deterministic.
+#
+#   field — a tariff field and what the documents say about it. These are
+#     asserted against the **offline fixture corpus** (trimmed copies of real
+#     ACBA pages, plus a PDF standing in for the bank's older information
+#     summary), because that is the only corpus that does not move under the
+#     test. Run with --live and the same items are reported against acba.am as
+#     information, not as pass or fail: a published tariff changing is the
+#     thing this system exists to notice, not a regression in it.
+#
+# The negatives matter as much as the positives. Three items assert that a
+# field the documents do not state comes back NOT_FOUND, because an evaluation
+# that only rewards finding things rewards guessing.
+
+version: 1
+
+items:
+  # --- product resolution, three languages ---------------------------------- #
+  - id: resolve-hy-consumer
+    kind: resolution
+    query: սպառողական վարկ
+    note: Armenian, exact synonym.
+    expect: {product_id: consumer_loan}
+
+  - id: resolve-en-consumer
+    kind: resolution
+    query: consumer loan
+    note: English.
+    expect: {product_id: consumer_loan}
+
+  - id: resolve-ru-consumer
+    kind: resolution
+    query: потребительский кредит
+    note: Russian.
+    expect: {product_id: consumer_loan}
+
+  - id: resolve-en-typo
+    kind: resolution
+    query: consumr laon
+    note: Two typos; rapidfuzz should still land it.
+    expect: {product_id: consumer_loan}
+
+  - id: resolve-hy-mortgage
+    kind: resolution
+    query: հիփոթեքային վարկ
+    note: Armenian.
+    expect: {product_id: mortgage}
+
+  - id: resolve-ru-mortgage
+    kind: resolution
+    query: ипотека
+    note: Russian, one word.
+    expect: {product_id: mortgage}
+
+  - id: resolve-latin-translit
+    kind: resolution
+    query: hipotekayin vark
+    note: Armenian typed on an English keyboard.
+    expect: {product_id: mortgage}
+
+  - id: reject-unsupported-product
+    kind: resolution
+    query: business mortgage
+    note: >
+      ACBA sells this; we do not monitor it. Fuzzy matching alone resolves it to
+      the retail mortgage, because the phrase contains it.
+    expect: {resolved: false}
+
+  - id: reject-unrelated-query
+    kind: resolution
+    query: քարտային ավանդ
+    note: A card deposit — not a loan at all.
+    expect: {resolved: false}
+
+  # --- extraction, consumer loan -------------------------------------------- #
+  - id: consumer-nominal-rate
+    kind: field
+    product: consumer_loan
+    field: nominal_rate
+    expect: {status: found, contains: "20.1-21.6%"}
+
+  - id: consumer-currency
+    kind: field
+    product: consumer_loan
+    field: currency
+    note: >
+      Offline the value is a whole passage rather than «ՀՀ դրամ» alone, because
+      the rule-based extractor quotes the sentence it found rather than reading
+      the value out of it. The assertion is on the currency being present and
+      evidenced, which is what the offline backend can honestly deliver.
+    expect: {status: found, contains: ՀՀ դրամ}
+
+  - id: consumer-amount
+    kind: field
+    product: consumer_loan
+    field: amount
+    expect: {status: found, contains: "10,000,000"}
+
+  - id: consumer-collateral
+    kind: field
+    product: consumer_loan
+    field: collateral
+    expect: {status: found, contains: առանց գրավ}
+
+  # --- extraction, mortgage -------------------------------------------------- #
+  - id: mortgage-nominal-rate
+    kind: field
+    product: mortgage
+    field: nominal_rate
+    note: >
+      Offline, both products are served the one summary PDF in the fixture set,
+      so the mortgage items assert that extraction succeeds with verified
+      evidence rather than any particular figure. Asserting a mortgage rate
+      against the consumer loan's fixture would be a test that passes for the
+      wrong reason. Run --live for the bank's actual mortgage values.
+    expect: {status: found}
+
+  - id: mortgage-currency
+    kind: field
+    product: mortgage
+    field: currency
+    note: Same caveat as mortgage-nominal-rate.
+    expect: {status: found}
+
+  # --- negatives: silence must be reported as silence ------------------------ #
+  - id: consumer-application-fee-absent
+    kind: field
+    product: consumer_loan
+    field: application_fee
+    note: >
+      Zero hits on «ուսումնաս», the loosest stem that could match, across both
+      of the consumer loan's documents. The bank does not state this charge.
+    expect: {status: not_found}
+
+  - id: consumer-term-absent-offline
+    kind: field
+    product: consumer_loan
+    field: term
+    note: >
+      The trimmed fixture page does not carry the term statement the live page
+      does. Asserted as absent offline, which is what the documents in front of
+      it actually say.
+    expect: {status: not_found}
+
+  - id: no-field-is-invented
+    kind: invariant
+    note: >
+      Every value reported for either product must carry evidence whose quote
+      occurs in the passage it was taken from. This is the promise the whole
+      project rests on, so it is an evaluation item and not only a unit test.

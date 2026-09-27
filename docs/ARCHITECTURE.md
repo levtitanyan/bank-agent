@@ -3,7 +3,7 @@
 How the ACBA tariff monitoring agent is put together: the modules, the order they
 run in, and the decisions behind them.
 
-> **Current state: Phase 8 of 9.** The pipeline runs end to end against the live site: a
+> **Current state: Phase 9 of 9.** The pipeline runs end to end against the live site: a
 > fuzzy product name resolves to a product, to its official ACBA sources; those are fetched,
 > parsed, cleaned and indexed; Gemini extracts each tariff field from retrieved passages;
 > every quote is verified against the passage it was attributed to; values are normalized and
@@ -17,7 +17,9 @@ run in, and the decisions behind them.
 > with all three absences accounted for in [`LIMITATIONS.md`](LIMITATIONS.md). 407 tests,
 > including one whole-flow test from a typed query to a rendered report.
 >
-> **Not built:** the evaluation dataset and demos (Phase 9).
+> **Demos and evaluation:** five runnable demos in [`demos/`](../demos/), offline by default,
+> each asserting its own claims; an 18-item evaluation set in [`eval/`](../eval/) whose results
+> are regenerated from an actual run.
 > Sections marked *(Phase N)* name the phase that built them; anything describing a later
 > phase is written in the future tense.
 
@@ -55,6 +57,43 @@ flowchart TD
     K -->|yes| L["HITL<br/>reviewer decides with evidence"]
     L -->|"approved / rejected<br/>(remembered by subject)"| O
 ```
+
+### The agent's reach *(Phase 8)*
+
+The pipeline above is the scheduled path. The agent reaches the same parts through six tools
+and decides which steps a question needs — and what it can reach is bounded by what it is able
+to *say*: every tool argument is an id an earlier tool minted, so a URL inside a document has
+no argument it could be expressed in.
+
+```mermaid
+flowchart LR
+    Q["User question"] --> A(("LlmAgent<br/>6 tools · budget 12"))
+
+    A -->|"query (free text)"| T1["resolve_product"]
+    T1 -->|product_id| A
+    A -->|product_id| T2["get_latest_snapshot"]
+    T2 -->|"fields + age_hours"| A
+    A -->|product_id| T3["find_sources"]
+    T3 -->|source_set_id| A
+    A -->|source_set_id| T4["extract_tariffs"]
+    T4 -->|extraction_id| A
+    A -->|extraction_id| T5["diff_against_previous"]
+    T5 -->|"snapshot_id + review_id[]"| A
+    A -->|review_id| T6["request_review"]
+    T6 -->|decision| A
+    A --> ANS["Answer with evidence"]
+
+    subgraph S["Session (Python side) — the model never sees these"]
+        DOC["documents · chunks · retrievers"]
+        EXT["extractions · diffs · review requests"]
+    end
+    T3 -.stores.-> DOC
+    T4 -.stores.-> EXT
+```
+
+Ids cross the boundary; payloads do not. A 1 MB PDF and sixty chunks would cost more context
+than the whole conversation, and — the reason that matters more — text the model never sees
+cannot instruct it. Every tool returns `ok`, `error` or `needs_review`; nothing raises.
 
 **What Gemini decides *(Phase 6)*:** which retrieved chunk answers a given tariff field, and
 what text to quote as the evidence for it. That is the whole of it.
@@ -465,4 +504,4 @@ rate, field match, NOT_FOUND precision and evidence-verification rate.
 | 6 | Gemini structured extraction + deterministic validation | ✅ |
 | 7 | Snapshots, normalized diffing, human-in-the-loop | ✅ |
 | 8 | ADK agent, pipeline, CLI | ✅ |
-| 9 | Demos, evaluation dataset, remaining docs | next |
+| 9 | Demos, evaluation dataset, remaining docs | ✅ |
