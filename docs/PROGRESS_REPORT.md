@@ -6,7 +6,7 @@ the ADK agent, its tools and the CLI.
 
 | | |
 |---|---|
-| Result | **14 of 20** through the shipping path (discovery → hybrid retrieval → Gemini), 15/20 with BM25-only, 17/20 when the two authoritative documents are supplied directly instead of discovered; every absence accounted for individually in [LIMITATIONS.md](LIMITATIONS.md) |
+| Result | **14 of 20 fields found** through the shipping path: 3 more the bank does not state, 3 more lost to `top_k`-per-role. 17/20 with sources supplied directly. Breakdown and cause in [LIMITATIONS.md](LIMITATIONS.md) §1 and §2.5 |
 | Tests | **407 passing**, none touching the network, including one whole-flow test from a typed query to a rendered report |
 | Lint / types | `ruff` clean · `mypy --strict` clean on `src/` |
 | Code | ~13,000 lines source (60 modules) · ~5,900 lines tests · 31 commits |

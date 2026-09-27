@@ -2,17 +2,28 @@
 
 What this system does not do, what it gets wrong, and what has not been measured.
 
-The extraction result depends on how the documents get in front of it:
+**All twenty fields, as the shipping path reports them:**
 
-| Path | Found |
+| | Fields | Which |
+|---|---|---|
+| Found, with a verified quote | **14** | |
+| The bank does not state them | **3** | consumer `application_fee`, mortgage `disbursement_fee`, mortgage `salary_privileges` |
+| We failed to report them | **3** | consumer `service_fee`, mortgage `service_fee`, mortgage `nominal_rate` (`unverified`) |
+
+The middle row is §1 below, evidenced one field at a time — those are the interesting ones,
+because they are the bank's silence and not a failure to read. The last row is §2.5, and it is
+ours: one cause, `top_k` counted per source role, with three named ways to close it.
+
+**The same result at three configurations**, because the comparison is the finding and the
+single number is not:
+
+| Configuration | Found |
 |---|---|
-| The two authoritative documents supplied directly | **17 / 20** |
+| The two authoritative documents supplied directly | 17 / 20 |
 | Discovery + BM25-only retrieval | 15 / 20 |
 | Discovery + hybrid retrieval — **what `tariff-agent` and the agent actually run** | 14 / 20 |
 
-§1 below accounts for the three absences in the first row, which are the interesting ones —
-they are the bank's silence rather than a failure to read. §2.5 accounts for the gap between
-the rows, which is ours. This
+This
 document accounts for all three that are not, one field at a time, with the evidence for each
 claim. A number on its own is not a result; the three absences are the interesting part, and
 two of them are the bank's silence rather than the system's failure.

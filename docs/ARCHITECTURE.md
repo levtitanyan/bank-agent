@@ -13,10 +13,20 @@ run in, and the decisions behind them.
 > An ADK agent reaches the same parts through six tools and decides for itself which steps a
 > question needs; a CLI exposes both paths.
 >
-> **Measured:** 14 of 20 fields found through the shipping path, 17 of 20 when the two
-> authoritative documents are supplied directly rather than discovered — the gap, and why, is
-> in [`LIMITATIONS.md`](LIMITATIONS.md) §2.5. 431 tests, including one whole-flow test from a
-> typed query to a rendered report.
+> **Measured, all twenty fields:** **14 found** with a verified quote; **3** the bank does not
+> state (consumer `application_fee`, mortgage `disbursement_fee`, mortgage
+> `salary_privileges`, each evidenced in [`LIMITATIONS.md`](LIMITATIONS.md) §1); **3** we
+> failed to report (both products' `service_fee`, and mortgage `nominal_rate` downgraded to
+> `unverified`), all three to one cause — `top_k` is four passages per source *role*, so the
+> extra documents discovery returns displace the passages that answer them ([§2.5](LIMITATIONS.md)).
+>
+> | Configuration | Found |
+> |---|---|
+> | The two authoritative documents supplied directly | 17 / 20 |
+> | Discovery + BM25-only retrieval | 15 / 20 |
+> | Discovery + hybrid retrieval — the default | 14 / 20 |
+>
+> 431 tests, including one whole-flow test from a typed query to a rendered report.
 >
 > **Demos and evaluation:** five runnable demos in [`demos/`](../demos/), offline by default,
 > each asserting its own claims; an 18-item evaluation set in [`eval/`](../eval/) whose results
