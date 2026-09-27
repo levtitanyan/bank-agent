@@ -440,3 +440,124 @@ def test_a_url_encoded_filename_is_decoded_for_the_reader() -> None:
     evidence = outcome.extraction.fields["nominal_rate"].evidence
     assert evidence is not None
     assert evidence.document_name == "loan info.pdf"
+
+# --------------------------------------------------------------------------- #
+# Conflicts are checked against the *other* source
+# --------------------------------------------------------------------------- #
+
+
+class RoleAwareExtractor:
+    """A backend whose answer depends on which passages it is shown.
+
+    Real conflict detection re-reads one source on its own, so a fake that
+    always answers the same thing cannot exercise it. This one answers from
+    whichever chunk it was given, which is what a real extractor does.
+
+    Args:
+        by_chunk: Chunk id to the (value, quote) that chunk states.
+        prefer: Chunk to answer from when several shown passages state the
+            field, standing in for the model's own choice between two sources.
+    """
+
+    def __init__(self, by_chunk: dict[str, tuple[str, str]], *, prefer: str = "") -> None:
+        """Record what each passage says."""
+        self._by_chunk = by_chunk
+        self._prefer = prefer
+        self.calls = 0
+        self.shown: list[list[str]] = []
+
+    @property
+    def method(self) -> str:
+        """Identifier recorded on the extraction."""
+        return "role_aware"
+
+    def extract(
+        self, specs: list[FieldSpec], chunks: list[Chunk], *, product: str | None = None
+    ) -> ExtractionResponse:
+        """Answer each field from the first shown chunk that states it."""
+        self.calls += 1
+        self.shown.append([c.chunk_id for c in chunks])
+        ordered = sorted(chunks, key=lambda c: c.chunk_id != self._prefer)
+        fields = []
+        for spec in specs:
+            answer = ExtractedField(field_id=spec.id)
+            for shown in ordered:
+                stated = self._by_chunk.get(shown.chunk_id)
+                if stated is not None and spec.id == "nominal_rate":
+                    value, quote = stated
+                    answer = ExtractedField(
+                        field_id=spec.id, value=value, quote=quote, chunk_id=shown.chunk_id
+                    )
+                    break
+            fields.append(answer)
+        return ExtractionResponse(fields=fields)
+
+
+PRIMARY_2023 = "Տարեկան անվանական տոկոսադրույք՝ 11.9-12.5%"
+CURRENT_PAGE = "Տարեկան անվանական տոկոսադրույք՝ 13.75-14.5%"
+
+
+def test_a_value_read_from_the_supporting_page_is_checked_against_the_primary() -> None:
+    """The mortgage case, and the reason the first fix for this was wrong.
+
+    The rate is stated on the current product page and in the 2023 information
+    summary, and they disagree. Taking the page's figure and then skipping the
+    check - which is what "the value came from a supporting source, so do not
+    compare" did - meant the authoritative primary's disagreement was never
+    raised at all.
+    """
+    chunks = [
+        chunk(PRIMARY_2023, "p001", role=SourceRole.PRIMARY, document_date=date(2023, 5, 15)),
+        chunk(CURRENT_PAGE, "s001", role=SourceRole.SUPPORTING),
+    ]
+    extractor = RoleAwareExtractor(
+        {"s001": ("13.75-14.5%", CURRENT_PAGE), "p001": ("11.9-12.5%", PRIMARY_2023)},
+        prefer="s001",
+    )
+    outcome = extract_tariffs(PRODUCT, "ACBA Bank", Retriever(chunks), extractor, ALLOWLIST)
+
+    assert outcome.extraction.fields["nominal_rate"].value == "13.75-14.5%"
+    conflict = next(c for c in outcome.conflicts if c.field_id == "nominal_rate")
+    assert conflict.primary.value == "11.9-12.5%", "the 2023 summary is the primary"
+    assert conflict.supporting.value == "13.75-14.5%"
+    # The 2023 date travels with the side it belongs to, so a reviewer can see
+    # that the disagreeing primary is the older document.
+    assert conflict.primary.document_date == date(2023, 5, 15)
+
+
+def test_a_source_is_never_compared_against_itself() -> None:
+    """The defect the over-correction was written to fix must stay fixed.
+
+    Only the supporting page states the value. Re-reading that same page and
+    comparing two readings of one sentence would manufacture a conflict out of
+    nothing, so the check must consult the primary - which says nothing - and
+    report no disagreement.
+    """
+    chunks = [
+        chunk("Վարկի ժամկետը՝ 12 - 240 ամիս", "p001", role=SourceRole.PRIMARY),
+        chunk(CURRENT_PAGE, "s001", role=SourceRole.SUPPORTING),
+    ]
+    extractor = RoleAwareExtractor({"s001": ("13.75-14.5%", CURRENT_PAGE)})
+    outcome = extract_tariffs(PRODUCT, "ACBA Bank", Retriever(chunks), extractor, ALLOWLIST)
+
+    assert outcome.extraction.fields["nominal_rate"].value == "13.75-14.5%"
+    assert not [c for c in outcome.conflicts if c.field_id == "nominal_rate"]
+    for shown in extractor.shown[1:]:
+        assert shown != ["s001"], "the supporting page was re-read against itself"
+
+
+def test_a_value_read_from_the_primary_is_still_checked_against_supporting() -> None:
+    """The original direction has to keep working."""
+    chunks = [
+        chunk(PRIMARY_2023, "p001", role=SourceRole.PRIMARY, document_date=date(2023, 5, 15)),
+        chunk(CURRENT_PAGE, "s001", role=SourceRole.SUPPORTING),
+    ]
+    extractor = RoleAwareExtractor(
+        {"p001": ("11.9-12.5%", PRIMARY_2023), "s001": ("13.75-14.5%", CURRENT_PAGE)}
+    )
+    outcome = extract_tariffs(PRODUCT, "ACBA Bank", Retriever(chunks), extractor, ALLOWLIST)
+
+    assert outcome.extraction.fields["nominal_rate"].value == "11.9-12.5%"
+    conflict = next(c for c in outcome.conflicts if c.field_id == "nominal_rate")
+    assert conflict.primary.value == "11.9-12.5%"
+    assert conflict.supporting.value == "13.75-14.5%"

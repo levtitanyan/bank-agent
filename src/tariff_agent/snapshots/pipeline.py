@@ -26,6 +26,7 @@ from tariff_agent.observability.logging import get_logger
 from tariff_agent.rag.retrieval import Retriever
 from tariff_agent.snapshots.diff import (
     FieldChange,
+    Provenance,
     SnapshotDiff,
     baseline_diff,
     diff_snapshots,
@@ -209,8 +210,23 @@ def review_requests(
     """
     requests: list[ReviewRequest] = []
 
-    if monitoring.review.on_large_change:
+    # A diff that is not COMPARABLE was caused by us, not by the bank: a
+    # reworded prompt or a different extractor moves values without anything
+    # being published. Those differences are still reported - suppressing them
+    # would hide real movement - but they are never escalated. A reviewer asked
+    # to confirm our own changes learns to approve without reading, and then
+    # approves the one that mattered.
+    if monitoring.review.on_large_change and diff.provenance is Provenance.COMPARABLE:
         requests.extend(_large_change_request(product_id, change) for change in diff.large_changes)
+    elif monitoring.review.on_large_change and diff.large_changes:
+        logger.info(
+            "large_changes_not_escalated",
+            extra={
+                "product_id": product_id,
+                "provenance": diff.provenance.value,
+                "changes": len(diff.large_changes),
+            },
+        )
 
     if monitoring.review.on_source_conflict:
         for conflict in conflicts:

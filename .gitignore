@@ -55,3 +55,4 @@ eval/results/
 .vscode/*
 !.vscode/settings.json.example
 *.swp
+.obsidian/

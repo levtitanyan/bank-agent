@@ -494,7 +494,7 @@ the other 587.
 | "PDF beats HTML" | The consumer-loan page links **no** «ամփոփագիր» and states its rates inline, while the shared `loans-tariffs.pdf` outscores it on keywords |
 | **Chosen: one primary plus ranked supporting sources** | Consumer → the page (primary) + the tariff PDF (supporting); mortgage → the summary PDF (primary) + the rest |
 
-Phase 6 needs both anyway: corroborating a rate across two official sources is how a `conflict`
+Extraction needs both anyway: corroborating a rate across two official sources is how a `conflict`
 is detected.
 
 ### P3-D11 · Role before score when choosing the primary

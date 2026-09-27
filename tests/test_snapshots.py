@@ -35,7 +35,7 @@ from tariff_agent.snapshots.diff import (
     baseline_diff,
     diff_snapshots,
 )
-from tariff_agent.snapshots.pipeline import run_monitoring
+from tariff_agent.snapshots.pipeline import review_requests, run_monitoring
 from tariff_agent.snapshots.review import (
     AutoReviewer,
     Decision,
@@ -241,6 +241,49 @@ def test_a_diff_across_prompt_versions_is_annotated() -> None:
     )
     assert diff.provenance is Provenance.PROMPT_CHANGED
     assert any("may be ours" in note for note in diff.notes)
+
+
+def test_a_change_that_is_ours_is_reported_but_never_escalated() -> None:
+    """A reviewer must not be asked to confirm our own extractor change.
+
+    Found by running the pipeline offline: a rule-based run diffed against a
+    stored Gemini snapshot asked a human whether the amount had really fallen
+    from 50,000-10,000,000 to 3,000,000. The bank had published nothing; the
+    extractor had changed. A reviewer trained to click through our changes
+    clicks through the one that matters.
+    """
+    diff = diff_snapshots(
+        extraction(nominal_rate=found("8.0%"), method="rule_based"),
+        extraction(nominal_rate=found("20.1%"), method="gemini:test"),
+    )
+    assert diff.provenance is Provenance.METHOD_CHANGED
+    assert diff.large_changes, "the move is still detected and reported"
+
+    requests = review_requests("consumer_loan", diff, [], MonitoringConfig())
+    assert requests == [], "but it is not put to a human"
+
+
+def test_a_prompt_change_is_reported_but_never_escalated() -> None:
+    """Same rule for a reworded prompt."""
+    diff = diff_snapshots(
+        extraction(nominal_rate=found("8.0%"), prompt_version=1),
+        extraction(nominal_rate=found("20.1%"), prompt_version=4),
+    )
+    assert diff.provenance is Provenance.PROMPT_CHANGED
+    assert diff.large_changes
+    assert review_requests("consumer_loan", diff, [], MonitoringConfig()) == []
+
+
+def test_a_comparable_change_of_the_same_size_is_escalated() -> None:
+    """The control: provenance is what differs, not the size of the move."""
+    diff = diff_snapshots(
+        extraction(nominal_rate=found("8.0%")),
+        extraction(nominal_rate=found("20.1%")),
+    )
+    assert diff.provenance is Provenance.COMPARABLE
+    requests = review_requests("consumer_loan", diff, [], MonitoringConfig())
+    assert len(requests) == 1
+    assert requests[0].trigger is ReviewTrigger.LARGE_CHANGE
 
 
 def test_a_new_edition_is_reported_separately_from_a_new_value() -> None:

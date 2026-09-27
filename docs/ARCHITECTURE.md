@@ -351,7 +351,7 @@ No floor separates them, so embeddings rank and only a lexical hit — requiring
 *identifying* token — decides that an answer exists.
 
 Primary and supporting sources are searched separately, because the bank's documents disagree
-(the 2023 summary says 11.9–12.5% where the current page says 13.75–14.5%) and Phase 6 needs to
+(the 2023 summary says 11.9–12.5% where the current page says 13.75–14.5%) and the extraction step has to
 see that as a conflict rather than average over it.
 
 ### `config.py` — split by who needs to audit it

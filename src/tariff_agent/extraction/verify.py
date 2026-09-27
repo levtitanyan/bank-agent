@@ -14,6 +14,7 @@ evidence that the answer did not come from what we asked about.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
@@ -25,6 +26,9 @@ logger = get_logger(__name__)
 
 MATCH_THRESHOLD = 0.90
 """How closely a quote must match the passage. Below this it is not a quote."""
+
+NUMBER = re.compile(r"\d[\d.,\s]*\d|\d")
+"""Digit runs, including ACBA's comma, dot and space grouping."""
 
 MIN_QUOTE_CHARS = 8
 """Below this length a quote is accepted only on an exact match.
@@ -98,6 +102,66 @@ def _occurs_exactly(quote: str, text: str) -> bool:
     return bool(needle) and needle in haystack
 
 
+def _digits(text: str) -> list[str]:
+    """Extract the numbers a passage or quote states, as bare digit strings.
+
+    Grouping is discarded, because ACBA writes «50,000», «50.000» and
+    «50 000» for the same amount - sometimes in one document.
+
+    Args:
+        text: Quote or passage.
+
+    Returns:
+        One digit-only string per number found, in order.
+    """
+    found = []
+    for match in NUMBER.finditer(text):
+        digits = re.sub(r"\D", "", match.group())
+        if digits:
+            found.append(digits)
+    return found
+
+
+def _numbers_are_real(quote: str, text: str) -> bool:
+    """Whether every number the quote states also occurs in the passage.
+
+    This is what stops the attack fuzzy matching cannot see. A tariff quote is
+    mostly boilerplate and a few digits, and the digits are the whole payload:
+    «Տևողություն 9-600 ամիս» against a document saying 9-60 scores **0.98** on
+    `partial_ratio`, and «…պայմաններով 4.9%» against 20.1-21.6% scores 0.94.
+    Both would have been reported as verified tariffs. Similarity is the right
+    test for wording and the wrong one for numbers, so the numbers are checked
+    exactly and separately.
+
+    Args:
+        quote: The text the model claims to have copied.
+        text: The passage it is attributed to.
+
+    Returns:
+        True when the quote states no numbers the passage does not.
+    """
+    available = _digits(text)
+    return all(number in available for number in _digits(quote))
+
+
+def _matches(quote: str, text: str, threshold: float) -> float:
+    """Score a quote against a passage, refusing invented numbers outright.
+
+    Args:
+        quote: The quoted text.
+        text: The passage.
+        threshold: Minimum similarity to accept.
+
+    Returns:
+        The similarity, or 0.0 when the quote states a number the passage does
+        not - a near-miss on digits is not a near-miss, it is a different fact.
+    """
+    score = _similarity(quote, text)
+    if score >= threshold and not _numbers_are_real(quote, text):
+        return 0.0
+    return score
+
+
 def verify_quote(
     quote: str,
     cited_chunk_id: str,
@@ -126,7 +190,7 @@ def verify_quote(
 
     cited = by_id.get(cited_chunk_id)
     if cited is not None:
-        score = _similarity(cleaned, cited.text)
+        score = _matches(cleaned, cited.text, threshold)
         if score >= threshold:
             return QuoteCheck(
                 verified=True,
@@ -143,7 +207,7 @@ def verify_quote(
     for chunk in retrieved:
         if chunk.chunk_id == cited_chunk_id:
             continue
-        score = _similarity(cleaned, chunk.text)
+        score = _matches(cleaned, chunk.text, threshold)
         if score > best_score:
             best_chunk, best_score = chunk, score
 
@@ -177,7 +241,8 @@ def verify_quote(
         score=best_score,
         reason=(
             f"the quote does not occur in any passage retrieved for this field "
-            f"(best match {best_score:.2f} < {threshold:.2f})"
+            f"(best match {best_score:.2f} < {threshold:.2f}); a quote stating a "
+            "number the passage does not is refused however closely the wording matches"
         ),
     )
 

@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 from pydantic import HttpUrl
+from rapidfuzz import fuzz
 
 from tariff_agent.config import Allowlist
 from tariff_agent.documents.document import DocumentKind
@@ -174,6 +175,39 @@ def test_a_fabricated_quote_is_refused() -> None:
     check = verify_quote("Տարեկան անվանական տոկոսադրույք՝ 9,9%", "c001", [chunk(PASSAGE)])
     assert not check.verified
     assert "does not occur" in check.reason
+
+
+def test_a_real_sentence_with_an_invented_number_is_refused() -> None:
+    """The attack fuzzy matching cannot see, and the reason for the digit check.
+
+    A tariff quote is mostly boilerplate and a few digits. Changing only the
+    digits leaves `partial_ratio` almost unmoved - 0.94 here - so similarity
+    alone would have reported an invented rate as a verified tariff.
+    """
+    forged = "acba digital-ով ձևակերպման դեպքում 4.9%"
+    assert fuzz.partial_ratio(forged, PASSAGE) / 100 >= 0.90, "the premise: wording still matches"
+
+    check = verify_quote(forged, "c001", [chunk(PASSAGE)])
+    assert not check.verified
+    assert "number the passage does not" in check.reason
+
+
+def test_an_inflated_term_is_refused() -> None:
+    """«9-600 ամիս» against a document saying 9-60 scores 0.98 on wording."""
+    passage = chunk("Տևողություն 9-60 ամիս, գումարը 50,000 - 10,000,000 ՀՀ դրամ")
+    assert not verify_quote("Տևողություն 9-600 ամիս", "c001", [passage]).verified
+
+
+def test_grouping_differences_do_not_count_as_invented_numbers() -> None:
+    """ACBA writes «50,000», «50.000» and «50 000» for the same amount."""
+    passage = chunk("Գումարը 50.000-10.000.000 ՀՀ դրամ, ժամկետը 9-60 ամիս")
+    assert verify_quote("Գումարը 50,000-10,000,000 ՀՀ դրամ", "c001", [passage]).verified
+
+
+def test_a_quote_with_no_numbers_is_unaffected() -> None:
+    """Text fields must not be caught by a rule written for digits."""
+    passage = chunk("Ապահովվածություն՝ առանց գրավի և երաշխավորի")
+    assert verify_quote("Ապահովվածություն՝ առանց գրավի", "c001", [passage]).verified
 
 
 def test_a_citation_slip_within_the_field_is_corrected() -> None:
@@ -361,6 +395,37 @@ def test_disjoint_ranges_from_two_official_sources_are_a_conflict() -> None:
     assert conflict.older_source is not None
     assert conflict.older_source.document_date == date(2023, 5, 15)
     assert "dated 2023-05-15" in conflict.primary.described
+
+
+def test_a_bare_zero_and_a_stated_absence_are_the_same_fact() -> None:
+    """Found in a live run, presented as two official sources contradicting.
+
+    The 2023 summary says «առանց ... վճարի», which a model renders as «0»; the
+    current page says «անվճար». Both mean the bank charges nothing. «0» had no
+    fee normalizer, so the comparison fell back to text and manufactured a
+    conflict a reviewer would have had to dismiss on every run.
+    """
+    assert normalize("0", ValueKind.FEE) == normalize("անվճար", ValueKind.FEE)
+    assert (
+        detect_conflict(
+            "application_fee",
+            found("0", ValueKind.FEE),
+            found("անվճար", ValueKind.FEE),
+        )
+        is None
+    )
+
+
+def test_a_real_fee_difference_is_still_a_conflict() -> None:
+    """The control: zero-equivalence must not swallow an actual disagreement."""
+    assert (
+        detect_conflict(
+            "disbursement_fee",
+            found("1%", ValueKind.FEE),
+            found("0.5%", ValueKind.FEE),
+        )
+        is not None
+    )
 
 
 def test_overlapping_ranges_are_not_a_conflict() -> None:

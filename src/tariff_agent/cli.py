@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json as jsonlib
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stdout
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -80,6 +82,43 @@ class Context:
     reviewer: Reviewer | None
 
 
+def interactive_terminal() -> bool:
+    """Whether a person is actually there to answer a review question.
+
+    Piped, redirected, in cron or in CI there is nobody at the keyboard, and a
+    reviewer prompt then reads EOF and aborts the run. A monitoring command
+    that dies because its output was piped is not usable, so the absence of a
+    terminal means the same as ``--json``: record the question, do not ask it.
+
+    Returns:
+        True when stdin is a terminal.
+    """
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, ValueError):  # pragma: no cover - closed stdin
+        return False
+
+
+@contextmanager
+def only_intended_output() -> Iterator[None]:
+    """Keep library chatter off stdout for the duration of a run.
+
+    PyMuPDF writes "Consider using the pymupdf_layout package..." to stdout the
+    first time it parses a document, which lands in the middle of `--json` and
+    makes it unparseable. Rather than chase each library, stdout is pointed at
+    stderr while the work runs and the command writes its own output
+    afterwards, so stdout carries the report or the JSON and nothing else.
+
+    A reviewer prompt is unaffected: ``CliReviewer`` captures the real stdout
+    when it is constructed, before this redirection begins.
+
+    Yields:
+        None.
+    """
+    with redirect_stdout(sys.stderr):
+        yield
+
+
 def build_context(*, cache: bool = True, interactive: bool = True) -> Context:
     """Construct everything the commands share.
 
@@ -96,7 +135,14 @@ def build_context(*, cache: bool = True, interactive: bool = True) -> Context:
     """
     settings = get_settings()
     allowlist = load_allowlist()
-    key = settings.google_api_key.get_secret_value() if settings.google_api_key else None
+    # `has_api_key` is the one place that knows an empty string is not a key.
+    # Testing `is None` here let GOOGLE_API_KEY="" through to the SDK, which
+    # failed with a traceback instead of the message below.
+    key = (
+        settings.google_api_key.get_secret_value()
+        if settings.has_api_key and settings.google_api_key is not None
+        else None
+    )
     backend: Extractor = (
         GeminiExtractor(key, model=settings.gemini_model) if key else RuleBasedExtractor()
     )
@@ -145,11 +191,13 @@ def run(
 ) -> None:
     """Monitor one product once, deterministically, and print its report."""
     configure_logging("DEBUG" if verbose else "WARNING")
-    context = build_context(cache=not no_cache, interactive=not json_out)
+    context = build_context(
+        cache=not no_cache, interactive=not json_out and interactive_terminal()
+    )
     resolved = _resolve_or_exit(context, product)
 
     try:
-        with run_context():
+        with only_intended_output(), run_context():
             result = run_product(
                 resolved,
                 context.catalog.bank,
@@ -184,11 +232,12 @@ def monitor(
     context = build_context(interactive=False)
 
     payloads: list[dict[str, Any]] = []
+    reports: list[str] = []
     failures = 0
     attention = 0
     for product in context.catalog.products:
         try:
-            with run_context():
+            with only_intended_output(), run_context():
                 result = run_product(
                     product,
                     context.catalog.bank,
@@ -211,11 +260,13 @@ def monitor(
             continue
         attention += int(result.needs_attention)
         payloads.append(_result_payload(result))
-        if not json_out:
-            typer.echo(result.report)
+        reports.append(result.report)
 
     if json_out:
         typer.echo(jsonlib.dumps(payloads, ensure_ascii=False, indent=2))
+    else:
+        for report in reports:
+            typer.echo(report)
     raise typer.Exit(code=1 if failures else (3 if attention else 0))
 
 
@@ -231,8 +282,8 @@ def agent(
     from tariff_agent.agent.agent import run_agent
     from tariff_agent.agent.session import AgentSession, Budget
 
-    context = build_context(interactive=not json_out)
-    if context.settings.google_api_key is None:
+    context = build_context(interactive=not json_out and interactive_terminal())
+    if not context.settings.has_api_key:
         typer.secho(
             "the agent needs GOOGLE_API_KEY; `run` works offline with the rule-based extractor",
             fg=typer.colors.RED,
@@ -253,7 +304,8 @@ def agent(
         reviewer=context.reviewer,
         budget=Budget(max_tool_calls=budget),
     )
-    result = run_agent(question, session)
+    with only_intended_output():
+        result = run_agent(question, session)
 
     if json_out:
         typer.echo(

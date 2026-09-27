@@ -154,7 +154,7 @@ async def run_agent_async(
 
     key = (
         session.settings.google_api_key.get_secret_value()
-        if session.settings.google_api_key
+        if session.settings.has_api_key and session.settings.google_api_key is not None
         else None
     )
     agent = build_agent(model or session.settings.gemini_model, api_key=key)

@@ -254,7 +254,7 @@ documents paraphrase more would likely invert it.
 
 Primary and supporting sources are searched separately, because ACBA's own documents disagree:
 the 2023 mortgage summary states 11.9–12.5% where the current product page says 13.75–14.5%.
-Phase 6 needs to see that as a `conflict`, not average over it.
+Extraction has to see that as a `conflict`, not average over it.
 
 ## 6.6 Phase 6 — Extraction, verification and validation
 

@@ -211,6 +211,10 @@ def _currency(text: str) -> dict[str, Any] | None:
     return result
 
 
+_BARE_ZERO = re.compile(r"^0(?:[.,]0+)?$")
+"""A fee written as nothing but a zero."""
+
+
 def _fee(text: str) -> dict[str, Any] | None:
     """Normalize a fee, which may be a percent, an amount, or nothing at all.
 
@@ -223,6 +227,12 @@ def _fee(text: str) -> dict[str, Any] | None:
         applies is information, and quite different from not stating one.
     """
     if _FREE.search(text) and not _PERCENT_VALUE.search(text.replace("0", "")):
+        return {"kind": "none", "value": 0.0, "unit": "free"}
+    # A bare zero is the third way the bank says "nothing is charged", and the
+    # way a model renders «առանց ... վճարի». Without this it normalized to None,
+    # the comparison fell back to text, and «0» against «անվճար» was reported
+    # as two official sources contradicting each other.
+    if _BARE_ZERO.match(text.strip()):
         return {"kind": "none", "value": 0.0, "unit": "free"}
     percent = _percent(text)
     if percent:

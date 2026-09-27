@@ -415,14 +415,26 @@ def _find_conflicts(
     extractor: Extractor,
     allowlist: Allowlist,
 ) -> list[FieldConflict]:
-    """Compare the primary source's answers with supporting sources.
+    """Compare each value against the source it did *not* come from.
+
+    The model is shown primary and supporting passages together, so a value can
+    legitimately be read from either. What must never happen is asking one
+    document whether it agrees with itself: two readings of the same sentence
+    differ in wording, and that was being reported as the bank contradicting
+    itself.
+
+    The first fix for that skipped the whole field whenever its value came from
+    a supporting passage, which was an over-correction. The mortgage's nominal
+    rate is stated on the current product page *and* in the 2023 information
+    summary, at 13.75-14.5% and 11.9-12.5%; taking the page's figure and then
+    skipping the check meant the authoritative primary's disagreement was never
+    raised. So the rule is not "skip the field" but "compare against the other
+    source".
 
     Args:
-        extraction: The validated extraction, whose values came from the
-            primary source.
-        retrieval: Retrieval results per field, which hold the supporting
-            passages.
-        extractor: The backend, used to read the supporting passages.
+        extraction: The validated extraction.
+        retrieval: Retrieval results per field, holding both sources' passages.
+        extractor: The backend, used to re-read the other source.
         allowlist: Domains evidence may come from.
 
     Returns:
@@ -436,92 +448,149 @@ def _find_conflicts(
         # collateral or a salary privilege in different words is normal, and
         # comparing them produced pure noise - a privilege sentence "against"
         # a percentage from a different product's row.
-        checkable = [
+        candidates = [
             field_id
             for field_id in member_ids
             if extraction.fields[field_id].status is FieldStatus.FOUND
-            and retrieval[field_id].supporting
             and FIELDS_BY_ID[field_id].kind is not ValueKind.TEXT
-            and not _came_from_supporting(extraction.fields[field_id], retrieval[field_id])
         ]
-        if not checkable:
-            continue
-        specs = [FIELDS_BY_ID[field_id] for field_id in checkable]
-        supporting = _supporting_passages(checkable, retrieval)
-        try:
-            response = extractor.extract(specs, supporting, product=extraction.product_id)
-        except ExtractionError:
-            logger.warning("conflict_check_failed", extra={"fields": checkable})
-            continue
-
-        answers = {answer.field_id: answer for answer in response.fields}
-        for field_id in checkable:
-            answer = answers.get(field_id)
-            if answer is None or answer.is_not_found:
-                continue
-            check = verify_quote(answer.quote, answer.chunk_id, supporting)
-            if not check.verified or check.chunk is None:
-                continue
-            spec = FIELDS_BY_ID[field_id]
-            other = FieldValue(
-                value=answer.value.strip(),
-                normalized=normalize(answer.value, spec.kind),
-                evidence=_evidence_from(check.chunk, answer.quote),
-                status=FieldStatus.FOUND,
+        by_other: dict[SourceRole, list[str]] = {}
+        for field_id in candidates:
+            other_role = _other_role(
+                _value_role(extraction.fields[field_id], retrieval[field_id])
             )
+            if _role_passages([field_id], retrieval, other_role):
+                by_other.setdefault(other_role, []).append(field_id)
+
+        for other_role, field_ids in by_other.items():
+            conflicts.extend(
+                _compare_against(extraction, retrieval, extractor, field_ids, other_role)
+            )
+    return conflicts
+
+
+def _compare_against(
+    extraction: TariffExtraction,
+    retrieval: dict[str, FieldRetrieval],
+    extractor: Extractor,
+    field_ids: list[str],
+    other_role: SourceRole,
+) -> list[FieldConflict]:
+    """Re-read one source's passages and compare them with what we reported.
+
+    Args:
+        extraction: The validated extraction.
+        retrieval: Retrieval results per field.
+        extractor: The backend.
+        field_ids: Fields whose values did not come from ``other_role``.
+        other_role: The source to consult.
+
+    Returns:
+        The disagreements found among those fields.
+    """
+    passages = _role_passages(field_ids, retrieval, other_role)
+    specs = [FIELDS_BY_ID[field_id] for field_id in field_ids]
+    try:
+        response = extractor.extract(specs, passages, product=extraction.product_id)
+    except ExtractionError:
+        logger.warning(
+            "conflict_check_failed",
+            extra={"fields": field_ids, "against": other_role.value},
+        )
+        return []
+
+    found: list[FieldConflict] = []
+    answers = {answer.field_id: answer for answer in response.fields}
+    for field_id in field_ids:
+        answer = answers.get(field_id)
+        if answer is None or answer.is_not_found:
+            continue
+        check = verify_quote(answer.quote, answer.chunk_id, passages)
+        if not check.verified or check.chunk is None:
+            continue
+        spec = FIELDS_BY_ID[field_id]
+        other = FieldValue(
+            value=answer.value.strip(),
+            normalized=normalize(answer.value, spec.kind),
+            evidence=_evidence_from(check.chunk, answer.quote),
+            status=FieldStatus.FOUND,
+        )
+        ours = extraction.fields[field_id]
+        # `primary` always means the authoritative document, whichever side the
+        # reported value happened to be read from.
+        if other_role is SourceRole.SUPPORTING:
             conflict = detect_conflict(
                 field_id,
-                extraction.fields[field_id],
+                ours,
                 other,
                 primary_date=_date_of(retrieval[field_id], SourceRole.PRIMARY),
                 supporting_date=check.chunk.document_date,
             )
-            if conflict is not None:
-                conflicts.append(conflict)
-    return conflicts
+        else:
+            conflict = detect_conflict(
+                field_id,
+                other,
+                ours,
+                primary_date=check.chunk.document_date,
+                supporting_date=_date_of(retrieval[field_id], SourceRole.SUPPORTING),
+            )
+        if conflict is not None:
+            found.append(conflict)
+    return found
 
 
-def _came_from_supporting(value: FieldValue, retrieval: FieldRetrieval) -> bool:
-    """Whether a field's value was already read from a supporting source.
-
-    The model is shown primary and supporting passages together, so a value can
-    legitimately come from the shared tariff book - that is where most of the
-    consumer loan's fees are published. Re-reading the supporting passages and
-    comparing would then be asking one source whether it agrees with itself,
-    and any wording difference between two readings of the same sentence would
-    be reported as the bank contradicting itself.
+def _value_role(value: FieldValue, retrieval: FieldRetrieval) -> SourceRole:
+    """Work out which source a reported value was actually read from.
 
     Args:
         value: The extracted value.
         retrieval: What was retrieved for that field.
 
     Returns:
-        True when the value's evidence points at a supporting passage.
+        ``SUPPORTING`` when the value's quote occurs in a supporting passage,
+        otherwise ``PRIMARY``.
     """
     if value.evidence is None:
-        return False
+        return SourceRole.PRIMARY
     quote = " ".join(value.evidence.quote.split())
+    if not quote:
+        return SourceRole.PRIMARY
     for scored in retrieval.supporting:
-        if quote and quote in " ".join(scored.chunk.text.split()):
-            return True
-    return False
+        if quote in " ".join(scored.chunk.text.split()):
+            return SourceRole.SUPPORTING
+    return SourceRole.PRIMARY
 
 
-def _supporting_passages(
-    field_ids: list[str], retrieval: dict[str, FieldRetrieval]
+def _other_role(role: SourceRole) -> SourceRole:
+    """Return the source role a value should be checked against.
+
+    Args:
+        role: Where the value came from.
+
+    Returns:
+        The opposite role.
+    """
+    return SourceRole.SUPPORTING if role is SourceRole.PRIMARY else SourceRole.PRIMARY
+
+
+def _role_passages(
+    field_ids: list[str], retrieval: dict[str, FieldRetrieval], role: SourceRole
 ) -> list[Chunk]:
-    """Collect the supporting passages retrieved for a group's fields.
+    """Collect one source's passages for a group's fields.
 
     Args:
         field_ids: The fields being compared.
         retrieval: Retrieval results per field.
+        role: Which source's passages to collect.
 
     Returns:
-        The supporting passages, de-duplicated.
+        The passages, de-duplicated and in retrieval order.
     """
     seen: dict[str, Chunk] = {}
     for field_id in field_ids:
-        for scored in retrieval[field_id].supporting:
+        result = retrieval[field_id]
+        pool = result.primary if role is SourceRole.PRIMARY else result.supporting
+        for scored in pool:
             seen.setdefault(scored.chunk.chunk_id, scored.chunk)
     return list(seen.values())
 

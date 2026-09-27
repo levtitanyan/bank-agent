@@ -18,7 +18,7 @@ Python 3.11 · Google ADK · Gemini
 > An ADK agent reaches the same parts through six tools and decides which steps a question
 > needs; a CLI exposes both paths.
 >
-> **17 of 20 fields found** across two products, stable across consecutive runs; 407 tests.
+> **17 of 20 fields found** across two products, stable across consecutive runs; 418 tests.
 > The evaluation dataset and demos (Phase 9) are not built yet.
 > See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and the roadmap, and
 > [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for what it gets wrong.
@@ -44,7 +44,7 @@ Running without a key is supported — offline demos and tests use a mock path.
 ## Run the checks
 
 ```bash
-pytest                            # 326 tests, none of which touch the network
+pytest                            # 418 tests, none of which touch the network
 ruff check src tests              # lint + docstring rules
 mypy                              # strict type checking of src/
 ```
@@ -57,12 +57,11 @@ brew install tesseract tesseract-lang     # provides hye + eng
 
 ## Demo
 
-Phase 1.5 has no CLI yet; the pipeline arrives in Phase 8. What works today is
-verifiable from the test suite, which covers the field registry, configuration loading,
-the evidence invariants and forward migration of stored snapshots.
-
-Planned demos (Phase 9): normal extraction · change detection · OCR fallback · a
-human-in-the-loop review · two controlled failures (404 and timeout).
+Five runnable demos live in [demos/](demos/), offline by default over trimmed copies of
+real ACBA pages: discovery and source ranking · PDF parsing and the OCR decision ·
+per-field retrieval including an honest NOT_FOUND · extraction with verified quotes ·
+change detection and human review. `demos/run_all.sh` runs all five; each asserts its
+own claim and exits non-zero if it fails. Pass `--live` to run against acba.am.
 
 ## Documentation
 

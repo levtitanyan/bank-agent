@@ -36,29 +36,46 @@ from tariff_agent.snapshots.review import AutoReviewer, Decision
 from tariff_agent.snapshots.store import SnapshotStore
 
 FIXTURES = Path(__file__).parent / "fixtures" / "discovery"
+DOCUMENTS = Path(__file__).parent / "fixtures" / "documents"
+TARIFF_PDF = "https://www.acba.am/files/loans-tariffs.pdf"
 CONSUMER_PAGE = "https://acba.am/hy/individual/loan/consumer-loan--up-to-10mln"
 CONSUMER_CATEGORY = "https://acba.am/hy/individual/loans/consumer-loans"
 PAGES = {
     CONSUMER_PAGE: "consumer_loan_10mln_page.html",
     CONSUMER_CATEGORY: "consumer_loans_page.html",
 }
+# The consumer loan's configured seed document. Serving a real PDF here is the
+# point of the fixture: PyMuPDF only writes its banner to stdout once it parses
+# one, and the HTML-only fixtures hid that from every earlier CLI test.
+PDFS = {TARIFF_PDF: "tariff_summary.pdf"}
 
 runner = CliRunner()
 
 
-def offline_context(tmp_path: Path, *, reviewer: Any | None = None) -> cli.Context:
+def offline_context(
+    tmp_path: Path, *, reviewer: Any | None = None, serve_pdfs: bool = True
+) -> cli.Context:
     """Build a CLI context with no network and no model.
 
     Args:
         tmp_path: Where the snapshot database goes.
         reviewer: Who answers review questions, if anyone.
+        serve_pdfs: False makes every PDF 404, which is how a product with no
+            readable source is simulated.
 
     Returns:
         The context the commands will use.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
-        filename = PAGES.get(str(request.url))
+        url = str(request.url)
+        if url in PDFS and serve_pdfs:
+            return httpx.Response(
+                200,
+                content=(DOCUMENTS / PDFS[url]).read_bytes(),
+                headers={"content-type": "application/pdf"},
+            )
+        filename = PAGES.get(url)
         if filename is None:
             return httpx.Response(404)
         return httpx.Response(
@@ -229,21 +246,31 @@ def test_snapshots_show_refuses_an_id_that_does_not_exist(offline: cli.Context) 
 
 
 def test_monitor_runs_every_configured_product(offline: cli.Context) -> None:
-    """The scheduled path covers the catalogue, and one failure is not fatal.
+    """The scheduled path covers the whole catalogue in one command."""
+    import json
 
-    Only the consumer loan's pages are served, so the mortgage fails to be read.
-    The command must report that and still have stored the consumer loan.
-    """
     result = runner.invoke(cli.app, ["monitor", "--json"])
-    assert result.exit_code == 1, "a product that could not be read is a failure"
+    assert result.exit_code in {0, 3}, result.output
+    payloads = json.loads(result.stdout)
+    assert {payload["product_id"] for payload in payloads} == {"consumer_loan", "mortgage"}
     assert offline.store.latest("consumer_loan") is not None
 
+
+def test_one_unreadable_product_does_not_stop_the_others(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A broken PDF must cost one product, not the run."""
     import json
+
+    context = offline_context(tmp_path, serve_pdfs=False)
+    monkeypatch.setattr(cli, "build_context", lambda **kw: context)
+    result = runner.invoke(cli.app, ["monitor", "--json"])
+    assert result.exit_code == 1, "a product that could not be read is a failure"
 
     payloads = json.loads(result.stdout)
     assert len(payloads) == 2
     assert any("error_type" in payload for payload in payloads)
-    assert any(payload.get("product_id") == "consumer_loan" for payload in payloads)
+    assert context.store.latest("consumer_loan") is not None
 
 
 def test_the_agent_command_refuses_without_a_key(
@@ -256,3 +283,71 @@ def test_the_agent_command_refuses_without_a_key(
     result = runner.invoke(cli.app, ["agent", "what is the rate?"])
     assert result.exit_code == 2
     assert "GOOGLE_API_KEY" in result.output
+
+# --------------------------------------------------------------------------- #
+# Defects found by running it, not by testing it
+# --------------------------------------------------------------------------- #
+
+
+def test_json_stays_parseable_when_a_pdf_is_parsed(offline: cli.Context) -> None:
+    """PyMuPDF writes a banner to stdout the first time it opens a document.
+
+    Every earlier CLI test served HTML only, so the banner never appeared and
+    `--json` looked fine while being unparseable in real use. The missing PDF
+    fixture was the defect; this is the test that would have caught it.
+    """
+    import json
+
+    result = runner.invoke(cli.app, ["run", "consumer loan", "--json"])
+    assert result.exit_code in {0, 3}, result.output
+    payload = json.loads(result.stdout)  # must not raise
+    assert payload["product_id"] == "consumer_loan"
+    assert "pymupdf" not in result.stdout.lower()
+
+
+def test_the_report_is_not_polluted_by_library_chatter(offline: cli.Context) -> None:
+    """Same guarantee for the human-readable form."""
+    result = runner.invoke(cli.app, ["run", "consumer loan"])
+    assert result.exit_code in {0, 3}
+    assert "pymupdf" not in result.stdout.lower()
+    assert result.stdout.lstrip().startswith(("─", "ACBA", "┌", "\n"))
+
+
+def test_a_run_without_a_terminal_does_not_stop_to_ask(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Piped, in cron or in CI there is nobody to answer a review prompt.
+
+    Before this, `tariff-agent run` built a CliReviewer regardless, read EOF
+    from a non-terminal stdin and aborted with exit 1 - so the default command
+    died whenever its output was redirected.
+    """
+    context = offline_context(tmp_path)
+    monkeypatch.setattr(cli, "build_context", lambda **kw: context)
+    monkeypatch.setattr(cli, "interactive_terminal", lambda: False)
+    # Seed a snapshot so the second run has a large change to escalate.
+    runner.invoke(cli.app, ["run", "consumer loan"])
+    result = runner.invoke(cli.app, ["run", "consumer loan"])
+    assert result.exit_code in {0, 3}, result.output
+    assert "Aborted" not in result.output
+    assert "[a]pprove" not in result.output
+
+
+def test_an_empty_api_key_is_treated_as_no_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """GOOGLE_API_KEY="" reached the SDK and produced a traceback.
+
+    An empty variable is how a key arrives from a half-filled .env or a CI
+    secret that was never set, so it must give the same clear refusal as no
+    variable at all.
+    """
+    from pydantic import SecretStr
+
+    context = offline_context(tmp_path)
+    context.settings.google_api_key = SecretStr("")
+    monkeypatch.setattr(cli, "build_context", lambda **kw: context)
+    result = runner.invoke(cli.app, ["agent", "what is the rate?"])
+    assert result.exit_code == 2
+    assert "GOOGLE_API_KEY" in result.output
+    assert "Traceback" not in result.output
